@@ -36,6 +36,7 @@ from modules.charts import (
     COLORS,
 )
 from modules.streamer import start_streamer, stream_status
+from modules.events_poller import start_poller, poller_status
 
 # ── Bootstrap theme + custom CSS ─────────────────────────────────────────────
 app = dash.Dash(
@@ -360,6 +361,20 @@ def refresh_dashboard(_n):
             f" | err: {ss['last_err'][:80]}",
             style={"color": COLORS["Negative"], "marginLeft": "8px"}
         ))
+
+    # Poller stats (shown when active)
+    ps = poller_status.snapshot()
+    if ps["running"]:
+        parts.append(html.Span(
+            f"  |  ⚡ CricAPI: {ps['events_logged']} events",
+            style={"color": "#00E5A0", "marginLeft": "12px", "fontWeight": "600"}
+        ))
+        if ps["credits"] is not None:
+            parts.append(html.Span(
+                f"  ({ps['credits']} credits left)",
+                style={"color": COLORS["muted"]}
+            ))
+
     status_bar = html.Div(parts, style={"display": "flex", "alignItems": "center"})
 
     return (fig_timeline, fig_volume, fig_teams, fig_donut,
@@ -389,8 +404,14 @@ def main():
     init_db()
     bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
     start_streamer(bearer_token)
+    # Phase 2B — live ball-by-ball poller (no-op if env vars not set)
+    started = start_poller()
+    if started:
+        logger.info("CricAPI event poller started.")
+    else:
+        logger.info("CricAPI poller inactive (set CRICAPI_KEY + MATCH_ID to enable).")
     logger.info("Dashboard starting on http://0.0.0.0:8050")
-    app.run(host="0.0.0.0", port=8050, debug=False)
+    app.run(host="0.0.0.0", port=int(os.getenv("DASH_PORT", 8050)), debug=False)
 
 
 if __name__ == "__main__":

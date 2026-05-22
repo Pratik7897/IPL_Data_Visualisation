@@ -1,17 +1,17 @@
 """
 Plotly figure builders for the IPL Sentiment Dashboard.
+Fixed for Plotly 6.x + Pandas 3.x:
+  - fillcolor uses rgba() not 8-digit hex
+  - add_vline x= uses ISO string not Timestamp (avoids pandas integer-add bug)
 """
 import io
 import base64
-import textwrap
 from datetime import datetime
-from collections import Counter, defaultdict
+from collections import Counter
 
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
+from plotly.subplots import make_subplots  # noqa: imported for future use
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 COLORS = {
@@ -51,6 +51,20 @@ AXIS_STYLE = dict(
 )
 
 
+def _hex_to_rgba(hex_color: str, alpha: float = 0.08) -> str:
+    """Convert #RRGGBB → rgba(r,g,b,alpha). Safe for Plotly 6.x."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _ts_to_str(ts) -> str:
+    """Convert Pandas Timestamp (or datetime) to ISO string for add_vline."""
+    if hasattr(ts, "isoformat"):
+        return ts.isoformat()
+    return str(ts)
+
+
 # ── 1. Sentiment time-series ───────────────────────────────────────────────────
 def build_sentiment_timeseries(rows: list, events: list) -> go.Figure:
     if not rows:
@@ -67,39 +81,47 @@ def build_sentiment_timeseries(rows: list, events: list) -> go.Figure:
         if sub.empty:
             continue
         sub["y"] = 1
-        # 1-min rolling count
         r1 = sub["y"].resample("1min").sum().fillna(0)
         r5 = sub["y"].resample("5min").sum().fillna(0)
 
-        col = COLORS[label]
+        col      = COLORS[label]
+        fill_col = _hex_to_rgba(col, 0.08)
+
         fig.add_trace(go.Scatter(
-            x=r1.index, y=r1.values,
+            x=r1.index.astype(str), y=r1.values,
             mode="lines", name=f"{label} (1-min)",
             line=dict(color=col, width=2),
             fill="tozeroy",
-            fillcolor=col.replace(")", ",0.08)").replace("rgb(", "rgba(")
-                        if col.startswith("rgb") else col + "14",
+            fillcolor=fill_col,
         ))
         fig.add_trace(go.Scatter(
-            x=r5.index, y=r5.values,
+            x=r5.index.astype(str), y=r5.values,
             mode="lines", name=f"{label} (5-min)",
             line=dict(color=col, width=1, dash="dot"),
         ))
 
-    # Annotate match events
+    # Annotate match events — add_vline is broken in Plotly 6 + Pandas 3;
+    # use add_shape + add_annotation instead.
     for ev in events:
         try:
-            et = pd.to_datetime(ev["event_time"])
+            et_str = _ts_to_str(pd.to_datetime(ev["event_time"]))
         except Exception:
             continue
-        etype = ev.get("event_type", "")
-        symbol = {"wicket": "🏏", "six": "💥", "four": "4️⃣",
-                  "wide": "W", "no_ball": "NB", "over": "⬛"}.get(etype, "•")
-        fig.add_vline(
-            x=et, line_width=1, line_dash="dash",
-            line_color=COLORS.get("Negative" if etype == "wicket" else "Positive"),
-            annotation_text=symbol,
-            annotation_font_size=12,
+        etype  = ev.get("event_type", "")
+        symbol = {"wicket": "W", "six": "6", "four": "4",
+                  "wide": "wd", "no_ball": "NB", "over": "ov"}.get(etype, "•")
+        line_color = COLORS["Negative"] if etype == "wicket" else COLORS["Positive"]
+        fig.add_shape(
+            type="line",
+            x0=et_str, x1=et_str, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(color=line_color, width=1, dash="dash"),
+        )
+        fig.add_annotation(
+            x=et_str, y=1, text=symbol,
+            xref="x", yref="paper",
+            showarrow=False, font=dict(size=11, color=line_color),
+            yanchor="bottom",
         )
 
     fig.update_layout(
@@ -118,9 +140,8 @@ def build_team_sentiment_bars(counts: list) -> go.Figure:
         return _empty_fig("Waiting for team mentions …")
 
     df = pd.DataFrame(counts)
-    teams = df["team_mention"].unique()
-
     fig = go.Figure()
+
     for label in ["Positive", "Neutral", "Negative"]:
         sub = df[df["label"] == label]
         fig.add_trace(go.Bar(
@@ -150,7 +171,7 @@ def build_volume_histogram(volume_rows: list, events: list) -> go.Figure:
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=df["ts"], y=df["count"],
+        x=df["ts"].astype(str), y=df["count"],
         marker=dict(
             color=df["count"],
             colorscale=[[0, COLORS["Neutral"]], [0.5, COLORS["Positive"]], [1, COLORS["Negative"]]],
@@ -159,16 +180,20 @@ def build_volume_histogram(volume_rows: list, events: list) -> go.Figure:
         name="Tweets/min",
     ))
 
-    # Spike lines for events
+    # Spike shapes for events
     for ev in events:
         try:
-            et = pd.to_datetime(ev["event_time"])
+            et_str = _ts_to_str(pd.to_datetime(ev["event_time"]))
         except Exception:
             continue
         etype = ev.get("event_type", "")
         c = COLORS["Negative"] if etype == "wicket" else COLORS["Positive"]
-        fig.add_vline(x=et, line_width=1, line_dash="dot",
-                      line_color=c)
+        fig.add_shape(
+            type="line",
+            x0=et_str, x1=et_str, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(color=c, width=1, dash="dot"),
+        )
 
     fig.update_layout(
         **LAYOUT_BASE,
@@ -188,7 +213,11 @@ def build_sentiment_donut(rows: list) -> go.Figure:
     if not labels:
         return _empty_fig("")
 
-    counts = Counter(labels)
+    counts   = Counter(labels)
+    total    = sum(counts.values())
+    dominant = max(counts, key=counts.get)
+    dom_pct  = int(counts[dominant] / total * 100)
+
     fig = go.Figure(go.Pie(
         labels=list(counts.keys()),
         values=list(counts.values()),
@@ -198,20 +227,15 @@ def build_sentiment_donut(rows: list) -> go.Figure:
         textfont=dict(size=11),
         hoverinfo="label+value",
     ))
-
-    total = sum(counts.values())
-    dominant = max(counts, key=counts.get)
-    dom_pct = int(counts[dominant] / total * 100)
-
+    donut_layout = {**LAYOUT_BASE, "margin": dict(l=10, r=10, t=40, b=10)}
     fig.update_layout(
-        **LAYOUT_BASE,
+        **donut_layout,
         title=dict(text="Overall Mood", font=dict(size=13), x=0.5),
         annotations=[dict(
             text=f"<b>{dominant}</b><br>{dom_pct}%",
             x=0.5, y=0.5, showarrow=False,
             font=dict(size=14, color=COLORS[dominant]),
         )],
-        margin=dict(l=10, r=10, t=40, b=10),
     )
     return fig
 
@@ -254,11 +278,11 @@ def build_wordcloud_img(texts: list, sentiment: str) -> str:
         plt.close()
         buf.seek(0)
         return "data:image/png;base64," + base64.b64encode(buf.read()).decode()
-    except Exception as e:
+    except Exception:
         return ""
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# ── helpers ────────────────────────────────────────────────────────────────────
 def _empty_fig(msg: str) -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
