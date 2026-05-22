@@ -273,7 +273,7 @@ def build_wordcloud_img(texts: list, sentiment: str) -> str:
         import matplotlib.pyplot as plt
 
         stop = STOPWORDS | {
-            "https", "http", "t", "co", "amp", "ipl", "ipl2025",
+            "https", "http", "t", "co", "amp", "ipl", "ipl2026",
             "rt", "the", "a", "is", "in", "of", "to", "and", "for",
         }
         combined = " ".join(texts)

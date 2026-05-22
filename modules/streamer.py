@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 # ── IPL stream rules ────────────────────────────────────────────────────────────
 STREAM_RULES = [
-    {"value": "#IPL2025 -is:retweet lang:en",            "tag": "ipl_main"},
+    {"value": "#IPL2026 -is:retweet lang:en",            "tag": "ipl_main"},
     {"value": "#MIvsCSK OR #CSKvsMI -is:retweet lang:en","tag": "mi_csk"},
     {"value": "#RCB OR #KKR -is:retweet lang:en",        "tag": "rcb_kkr"},
     {"value": "#Kohli OR #Dhoni OR #Bumrah -is:retweet lang:en", "tag": "players"},
-    {"value": "#IPLfinal OR #IPL2025final -is:retweet lang:en",  "tag": "final"},
+    {"value": "#IPLfinal OR #IPL2026final -is:retweet lang:en",  "tag": "final"},
 ]
 
 TWEET_FIELDS = "id,text,author_id,created_at,lang,public_metrics"
@@ -225,9 +225,9 @@ def _process_tweet(tweet_id, text, author, created_at,
 # ── Demo data generator ─────────────────────────────────────────────────────────
 DEMO_TWEETS = [
     # Positive
-    ("Bumrah is absolutely unplayable tonight! What a spell! 🔥 #IPL2025 #MIvsCSK", "MI"),
+    ("Bumrah is absolutely unplayable tonight! What a spell! 🔥 #IPL2026 #MIvsCSK", "MI"),
     ("Dhoni finishes off in style! That six was pure class 💥 #Thala #CSK", "CSK"),
-    ("Kohli on 🔥 brilliant century coming up! RCB all the way!! #IPL2025", "RCB"),
+    ("Kohli on 🔥 brilliant century coming up! RCB all the way!! #IPL2026", "RCB"),
     ("What a catch by Jadeja!! Absolute genius in the field 🙌 #CSK", "CSK"),
     ("Maxwell going berserk! RCB fans this is your moment!! 🚀", "RCB"),
     ("KL Rahul looking so classy tonight, LSG are going to win this! 💯", "LSG"),
@@ -241,17 +241,17 @@ DEMO_TWEETS = [
     ("RCB collapse again... same story every year 💔 disappointed", "RCB"),
     ("That was clearly a no ball, absolutely robbed by the umpires 😡 #KKR", "KKR"),
     ("Another wicket falls, our batting lineup is a disaster today 😢", ""),
-    ("Worst DRS decision I've ever seen. Match fixing vibes 😤 #IPL2025", ""),
+    ("Worst DRS decision I've ever seen. Match fixing vibes 😤 #IPL2026", ""),
     ("That runout was so avoidable, horrible running between the wickets 👎", "SRH"),
     ("Losing from a winning position AGAIN. This team has no spine 😡 #PBKS", "PBKS"),
     # Neutral
-    ("CSK need 48 off 24 balls, this could go either way #IPL2025", "CSK"),
+    ("CSK need 48 off 24 balls, this could go either way #IPL2026", "CSK"),
     ("Interesting field placement by Rohit, let's see if it works #MI", "MI"),
-    ("Over 14: SRH 134/4, game is nicely poised right now #IPL2025", "SRH"),
+    ("Over 14: SRH 134/4, game is nicely poised right now #IPL2026", "SRH"),
     ("Third umpire checking for no ball on that Bumrah wicket #MIvsCSK", "MI"),
     ("Both teams playing well, whoever wins the next 2 overs wins the match", ""),
     ("Score update: RR 98/3 after 12 overs, reasonable platform set", "RR"),
-    ("Strategic timeout coming up, teams will regroup #IPL2025", ""),
+    ("Strategic timeout coming up, teams will regroup #IPL2026", ""),
     ("Rain interruption, DLS method may come into play if it continues", ""),
     # Event-heavy
     ("WICKET!! Kohli is OUT! Caught at deep mid-wicket! RCB 87/3 😮", "RCB"),
@@ -259,7 +259,7 @@ DEMO_TWEETS = [
     ("FOUR!! Rohit drives through covers, beautiful timing! #MI", "MI"),
     ("Wide ball, that was miles down leg side. 3 wides this over #SRH", "SRH"),
     ("NO BALL!! Free hit coming up for Gill 😍 #GT", "GT"),
-    ("End of over 15: RCB 122/4, Maxwell on 67* off 38 balls! #IPL2025", "RCB"),
+    ("End of over 15: RCB 122/4, Maxwell on 67* off 38 balls! #IPL2026", "RCB"),
     ("WICKET!! Bumrah strikes again, Ruturaj clean bowled! #MIvsCSK 🔥", "MI"),
     ("That SIX by Russell nearly hit the commentary box! KKR crowd going crazy!", "KKR"),
     # Hinglish tweets (Phase 2C)
@@ -270,7 +270,7 @@ DEMO_TWEETS = [
     ("Rohit sharma wah wah! Ek dum solid innings tha yaar! #MI best", "MI"),
     ("SRH ka batting lineup aaj bahut kharab laga yaar, haar jayenge 😢", "SRH"),
     ("Jadeja bhai ne kya catch pakda! Kamaal ka fielder hai yeh 🙌 #CSK", "CSK"),
-    ("Dekhte hain aage kya hota hai, abhi match ka pata nahi #IPL2025", ""),
+    ("Dekhte hain aage kya hota hai, abhi match ka pata nahi #IPL2026", ""),
     ("Maxwell ne zabardast chakka maara bhai! RCB fans mast ho jao! 💥", "RCB"),
     ("Yeh toss ke baad team decide karenge, abhi sab shayad ho sakta hai", ""),
     ("KL Rahul ekdum bindaas batting kar raha hai, LSG jeetenge aaj!", "LSG"),
@@ -307,7 +307,7 @@ class DemoStreamer:
     def _emit(self):
         self._counter += 1
         text, _ = random.choice(DEMO_TWEETS)
-        text += " #IPL2025"
+        text += " #IPL2026"
         tweet_id   = f"demo_{self._counter:010d}_{int(time.time()*1000) % 100000}"
         author     = f"fan_{random.randint(1000, 9999)}"
         created_at = datetime.now(timezone.utc).isoformat()

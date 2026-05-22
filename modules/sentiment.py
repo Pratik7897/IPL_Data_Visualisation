@@ -45,6 +45,8 @@ NOISE_PATTERN = re.compile(
 
 def clean_tweet(text: str) -> str:
     text = NOISE_PATTERN.sub(" ", text)
+    # Strip bare year-tags left after # removal (e.g. "IPL2026", "IPL2025")
+    text = re.sub(r'\bIPL20\d{2}\b', '', text, flags=re.IGNORECASE)
     return " ".join(text.split())[:512]
 
 

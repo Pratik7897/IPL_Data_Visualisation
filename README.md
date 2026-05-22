@@ -10,7 +10,7 @@ Real-time sentiment analysis and live dashboard for IPL matches — tracks how T
 X API v2 (Tweepy filtered stream)
         │
         ▼
- modules/streamer.py  ─── keyword filters: #IPL2025, #MIvsCSK, player names
+ modules/streamer.py  ─── keyword filters: #IPL2026, #MIvsCSK, player names
         │
         ▼
  modules/sentiment.py ─── cardiffnlp/twitter-roberta-base-sentiment
@@ -78,7 +78,7 @@ Demo mode streams synthetic tweets automatically — no API key needed.
 4. Restart the app — the real filtered stream will replace the demo generator.
 
 Stream rules (in `modules/streamer.py`) filter for:
-- `#IPL2025` main hashtag
+- `#IPL2026` main hashtag
 - Match-specific tags like `#MIvsCSK`
 - Player names: `#Kohli`, `#Bumrah`, `#Dhoni`, …
 
