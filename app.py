@@ -38,6 +38,7 @@ from modules.charts import (
 )
 from modules.streamer import start_streamer, stream_status
 from modules.events_poller import start_poller, poller_status
+from modules.exporter import register_export_routes
 
 # ── App init ───────────────────────────────────────────────────────────────────
 app = dash.Dash(
@@ -50,6 +51,7 @@ app = dash.Dash(
     update_title=None,
 )
 server = app.server
+register_export_routes(server)   # Phase 3C — /export/{csv,json,events,summary,health}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HELPERS
@@ -308,6 +310,65 @@ app.layout = html.Div([
                     "color": COLORS["Positive"], "fontWeight": "600",
                 }),
             ], style=CARD_STYLE),
+
+            # ── EXPORT PANEL (Phase 3C) ────────────────────────────────────
+            html.Div([
+                html.Div("EXPORT DATA", style={
+                    "color": COLORS["muted"], "fontSize": "10px",
+                    "textTransform": "uppercase", "letterSpacing": "2px",
+                    "marginBottom": "12px",
+                }),
+                *[
+                    html.A(
+                        label,
+                        href=href,
+                        target="_blank",
+                        style={
+                            "display": "block",
+                            "width": "100%",
+                            "boxSizing": "border-box",
+                            "background": bg,
+                            "color": fg,
+                            "border": f"1px solid {border}",
+                            "borderRadius": "6px",
+                            "padding": "9px 14px",
+                            "marginBottom": "8px",
+                            "fontWeight": "700",
+                            "fontSize": "12px",
+                            "textDecoration": "none",
+                            "letterSpacing": "1px",
+                            "fontFamily": "'DM Mono', monospace",
+                            "cursor": "pointer",
+                            "textAlign": "center",
+                        },
+                    )
+                    for label, href, bg, fg, border in [
+                        ("⬇ Download CSV",
+                         "/export/csv",
+                         "#00E5A015", COLORS["Positive"], COLORS["Positive"]),
+                        ("⬇ Download JSON",
+                         "/export/json",
+                         "#FFD16615", COLORS["Neutral"], COLORS["Neutral"]),
+                        ("⬇ Events CSV",
+                         "/export/events",
+                         "#FF475715", COLORS["Negative"], COLORS["Negative"]),
+                        ("📄 Match Summary",
+                         "/export/summary",
+                         "#58A6FF15", "#58A6FF", "#58A6FF"),
+                    ]
+                ],
+                html.A(
+                    "● API Health",
+                    href="/export/health",
+                    target="_blank",
+                    style={
+                        "display": "block", "textAlign": "center",
+                        "fontSize": "10px", "color": COLORS["muted"],
+                        "marginTop": "4px", "textDecoration": "none",
+                        "letterSpacing": "1px",
+                    },
+                ),
+            ], style={**CARD_STYLE, "marginTop": "0"}),
 
         ], style={"width": "300px", "flexShrink": "0"}),
 
