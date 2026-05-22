@@ -40,6 +40,7 @@ from modules.streamer import start_streamer, stream_status
 from modules.events_poller import start_poller, poller_status
 from modules.exporter import register_export_routes
 from modules.ai_routes import register_ai_routes
+from modules.ai.stream_replay import start_stream_replay
 
 # ── App init ───────────────────────────────────────────────────────────────────
 app = dash.Dash(
@@ -419,18 +420,51 @@ app.layout = html.Div([
 
         ], style={"flex": "1", "minWidth": "0", "margin": "0 16px"}),
 
-        # ── RIGHT COLUMN — LIVE FEED (300px) ──────────────────────────────────
+        # ── RIGHT COLUMN — SOCIAL SENTIMENT STREAM (300px) ─────────────────────
         html.Div([
-            html.Div("LIVE FEED", style={
-                "color": COLORS["text"], "fontSize": "12px", "fontWeight": "800",
-                "textTransform": "uppercase", "letterSpacing": "3px",
+            # Header with pulse
+            html.Div([
+                html.Span(id="stream-pulse", children="●", style={
+                    "color": COLORS["Positive"], "fontSize": "10px",
+                    "marginRight": "6px", "animation": "pulse 1.5s infinite",
+                }),
+                html.Span("SOCIAL SENTIMENT STREAM", style={
+                    "color": COLORS["text"], "fontSize": "11px",
+                    "fontWeight": "800", "letterSpacing": "2px",
+                    "fontFamily": "'Syne', sans-serif",
+                }),
+            ], style={"display": "flex", "alignItems": "center",
+                      "marginBottom": "12px"}),
+            # Source legend pills
+            html.Div([
+                html.Span("Reddit",   style={"background": "#FF450020", "color": "#FF4500",
+                    "border": "1px solid #FF4500", "borderRadius": "12px",
+                    "padding": "1px 7px", "fontSize": "9px", "fontWeight": "700",
+                    "marginRight": "4px"}),
+                html.Span("YouTube",  style={"background": "#FF000020", "color": "#FF0000",
+                    "border": "1px solid #FF0000", "borderRadius": "12px",
+                    "padding": "1px 7px", "fontSize": "9px", "fontWeight": "700",
+                    "marginRight": "4px"}),
+                html.Span("Thread",   style={"background": "#58A6FF20", "color": "#58A6FF",
+                    "border": "1px solid #58A6FF", "borderRadius": "12px",
+                    "padding": "1px 7px", "fontSize": "9px", "fontWeight": "700"}),
+            ], style={"marginBottom": "10px", "display": "flex", "flexWrap": "wrap", "gap": "4px"}),
+            # Live stream feed (updated every 8s)
+            html.Div(id="fan-stream-feed", style={
+                "overflowY": "auto", "maxHeight": "420px",
                 "marginBottom": "12px",
-                "fontFamily": "'Syne', sans-serif",
+            }),
+            # Divider
+            html.Div("─── LIVE TWEET FEED ───", style={
+                "color": COLORS["muted"], "fontSize": "9px",
+                "letterSpacing": "2px", "textAlign": "center",
+                "marginBottom": "8px",
             }),
             html.Div(id="tweet-feed", style={
-                "overflowY": "auto", "maxHeight": "860px",
+                "overflowY": "auto", "maxHeight": "400px",
             }),
         ], style={"width": "300px", "flexShrink": "0"}),
+
 
     ], style={
         "display": "flex", "gap": "0",
@@ -439,8 +473,188 @@ app.layout = html.Div([
     }),
 
     # ── Intervals ─────────────────────────────────────────────────────────────
-    dcc.Interval(id="refresh-interval",    interval=5000,  n_intervals=0),
-    dcc.Interval(id="ai-refresh-interval", interval=30000, n_intervals=0),
+    dcc.Interval(id="refresh-interval",       interval=5000,  n_intervals=0),
+    dcc.Interval(id="ai-refresh-interval",    interval=30000, n_intervals=0),
+    dcc.Interval(id="stream-refresh-interval",interval=8000,  n_intervals=0),
+    dcc.Interval(id="replay-interval",        interval=4000,  n_intervals=0, disabled=True),
+
+    # ── PHASE 5 — INTERACTIVE PREDICTION CONTROL PANEL ────────────────────────
+    html.Div([
+        html.Div("🎯 INTERACTIVE MATCH PREDICTOR", style={
+            "color": COLORS["text"], "fontSize": "13px", "fontWeight": "800",
+            "letterSpacing": "3px", "fontFamily": "'Syne', sans-serif",
+            "marginBottom": "16px",
+            "borderBottom": f"1px solid {COLORS['Positive']}40",
+            "paddingBottom": "10px",
+        }),
+        # Control row
+        html.Div([
+            # Team A
+            html.Div([
+                html.Div("TEAM 1", style={"color": COLORS["muted"], "fontSize": "9px",
+                    "letterSpacing": "2px", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="ip-team-a",
+                    options=[
+                        {"label": t, "value": t} for t in
+                        ["MI","CSK","RCB","KKR","SRH","RR","DC","PBKS","GT","LSG"]
+                    ],
+                    value="MI",
+                    clearable=False,
+                    style={"background": "#161B22", "color": COLORS["text"]},
+                ),
+            ], style={"flex": "1", "minWidth": "120px"}),
+            # VS divider
+            html.Div("VS", style={
+                "color": COLORS["Positive"], "fontWeight": "800",
+                "fontFamily": "'Syne', sans-serif", "fontSize": "18px",
+                "alignSelf": "flex-end", "marginBottom": "4px",
+                "padding": "0 10px",
+            }),
+            # Team B
+            html.Div([
+                html.Div("TEAM 2", style={"color": COLORS["muted"], "fontSize": "9px",
+                    "letterSpacing": "2px", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="ip-team-b",
+                    options=[
+                        {"label": t, "value": t} for t in
+                        ["MI","CSK","RCB","KKR","SRH","RR","DC","PBKS","GT","LSG"]
+                    ],
+                    value="CSK",
+                    clearable=False,
+                    style={"background": "#161B22", "color": COLORS["text"]},
+                ),
+            ], style={"flex": "1", "minWidth": "120px"}),
+            # Venue
+            html.Div([
+                html.Div("VENUE", style={"color": COLORS["muted"], "fontSize": "9px",
+                    "letterSpacing": "2px", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="ip-venue",
+                    options=[
+                        {"label": v, "value": v} for v in
+                        ["Wankhede","Chepauk","Chinnaswamy","Eden Gardens",
+                         "Narendra Modi","Kotla","Sawai Mansingh","Hyderabad",
+                         "DY Patil","Brabourne","Neutral"]
+                    ],
+                    value="Neutral",
+                    clearable=False,
+                    style={"background": "#161B22", "color": COLORS["text"]},
+                ),
+            ], style={"flex": "1", "minWidth": "150px"}),
+            # Toss
+            html.Div([
+                html.Div("TOSS WINNER", style={"color": COLORS["muted"], "fontSize": "9px",
+                    "letterSpacing": "2px", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="ip-toss",
+                    options=[
+                        {"label": "None / Unknown", "value": "none"},
+                        {"label": "Team 1 won toss",  "value": "a"},
+                        {"label": "Team 2 won toss",  "value": "b"},
+                    ],
+                    value="none",
+                    clearable=False,
+                    style={"background": "#161B22", "color": COLORS["text"]},
+                ),
+            ], style={"flex": "1", "minWidth": "160px"}),
+            # Predict button
+            html.Div([
+                html.Div("\u00a0", style={"fontSize": "9px", "marginBottom": "6px"}),
+                html.Button(
+                    "⚡ PREDICT", id="predict-btn", n_clicks=0,
+                    style={
+                        "background": f"linear-gradient(135deg, {COLORS['Positive']}, #00b371)",
+                        "color": "#0D1117", "border": "none",
+                        "borderRadius": "8px", "padding": "10px 22px",
+                        "fontWeight": "800", "fontSize": "13px",
+                        "cursor": "pointer", "letterSpacing": "1px",
+                        "fontFamily": "'Syne', sans-serif",
+                        "whiteSpace": "nowrap",
+                    },
+                ),
+            ]),
+        ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap",
+                  "alignItems": "flex-end", "marginBottom": "16px"}),
+
+        # Results row (2 cols: prob bars + explainability)
+        html.Div([
+            # Left: win probability output
+            html.Div([
+                html.Div(id="ip-result-header", children="Select teams and click PREDICT", style={
+                    "color": COLORS["muted"], "fontSize": "12px",
+                    "marginBottom": "14px", "fontStyle": "italic",
+                }),
+                html.Div(id="ip-bar-a-label", style={
+                    "display": "flex", "justifyContent": "space-between",
+                    "marginBottom": "6px"}),
+                html.Div(id="ip-bar-a", style={"height": "10px", "borderRadius": "5px",
+                    "marginBottom": "14px", "width": "0%",
+                    "background": f"linear-gradient(90deg, {COLORS['Positive']}, #00b371)",
+                    "transition": "width 1s ease"}),
+                html.Div(id="ip-bar-b-label", style={
+                    "display": "flex", "justifyContent": "space-between",
+                    "marginBottom": "6px"}),
+                html.Div(id="ip-bar-b", style={"height": "10px", "borderRadius": "5px",
+                    "marginBottom": "14px", "width": "0%",
+                    "background": f"linear-gradient(90deg, {COLORS['Negative']}, #b30000)",
+                    "transition": "width 1s ease"}),
+                html.Div(id="ip-pills", style={"display": "flex", "gap": "8px",
+                    "flexWrap": "wrap"}),
+            ], style={"flex": "1", "minWidth": "280px", "paddingRight": "20px",
+                      "borderRight": f"1px solid {COLORS['border']}"}),
+
+            # Right: WHY THIS PREDICTION?
+            html.Div([
+                html.Div("💡 WHY THIS PREDICTION?", style={
+                    "color": COLORS["Neutral"], "fontSize": "10px",
+                    "letterSpacing": "2px", "fontWeight": "700",
+                    "marginBottom": "12px",
+                }),
+                # Confidence meter
+                html.Div([
+                    html.Span("CONFIDENCE", style={"color": COLORS["muted"], "fontSize": "9px",
+                        "letterSpacing": "2px", "marginRight": "10px"}),
+                    html.Span(id="ip-conf-pct", children="—", style={
+                        "color": "#58A6FF", "fontWeight": "800",
+                        "fontSize": "16px", "fontFamily": "'Syne', sans-serif",
+                    }),
+                    html.Div(id="ip-conf-bar", style={
+                        "height": "4px", "borderRadius": "2px", "marginTop": "4px",
+                        "background": "linear-gradient(90deg, #58A6FF, #0066FF)",
+                        "width": "0%", "transition": "width 1s ease",
+                    }),
+                ], style={"marginBottom": "12px"}),
+                # Data quality
+                html.Div(id="ip-data-quality", style={
+                    "color": COLORS["muted"], "fontSize": "10px",
+                    "marginBottom": "12px", "fontStyle": "italic",
+                }),
+                # Reasons list
+                html.Div("SIGNALS", style={"color": COLORS["muted"], "fontSize": "9px",
+                    "letterSpacing": "2px", "marginBottom": "8px"}),
+                html.Ul(id="ip-reasons", style={
+                    "paddingLeft": "16px", "margin": "0 0 10px 0",
+                    "color": COLORS["text"], "fontSize": "12px", "lineHeight": "1.8",
+                }),
+                html.Div("COUNTER-RISKS", style={"color": COLORS["muted"], "fontSize": "9px",
+                    "letterSpacing": "2px", "marginBottom": "6px"}),
+                html.Ul(id="ip-counter", style={
+                    "paddingLeft": "16px", "margin": "0",
+                    "color": COLORS["Neutral"], "fontSize": "11px", "lineHeight": "1.7",
+                }),
+            ], style={"flex": "1", "minWidth": "280px", "paddingLeft": "20px"}),
+
+        ], style={"display": "flex", "gap": "0", "flexWrap": "wrap"}),
+
+    ], style={
+        **CARD_STYLE,
+        "margin": "0 20px 16px",
+        "background": "#0D1117",
+        "border": f"1px solid {COLORS['Positive']}40",
+    }),
+
 
     # ── PHASE 4 — AI FEATURE ROW ──────────────────────────────────────────────
     html.Div([
@@ -542,6 +756,103 @@ app.layout = html.Div([
     ], style={
         "display": "flex", "gap": "16px", "flexWrap": "wrap",
         "padding": "0 20px 24px", "alignItems": "flex-start",
+    }),
+
+    # ── PHASE 5 — REPLAY HISTORIC MATCH ──────────────────────────────────────
+    html.Div([
+        html.Div([
+            html.Span("🎬", style={"fontSize": "18px", "marginRight": "8px"}),
+            html.Span("REPLAY HISTORIC MATCH", style={
+                "color": COLORS["text"], "fontSize": "13px", "fontWeight": "800",
+                "letterSpacing": "3px", "fontFamily": "'Syne', sans-serif",
+            }),
+        ], style={"display": "flex", "alignItems": "center",
+                  "marginBottom": "14px", "borderBottom": f"1px solid {COLORS['Neutral']}40",
+                  "paddingBottom": "10px"}),
+
+        html.Div([
+            # Match selector
+            html.Div([
+                html.Div("SELECT MATCH", style={"color": COLORS["muted"], "fontSize": "9px",
+                    "letterSpacing": "2px", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="replay-match-select",
+                    options=[
+                        {"label": "CSK vs MI — IPL 2019 Final",                 "value": "csk_vs_mi_2019_final"},
+                        {"label": "RCB vs CSK — 2015 Eliminator",              "value": "rcb_vs_csk_2015_pe"},
+                        {"label": "MI vs SRH — IPL 2013 Final",                "value": "mi_vs_srh_2013_final"},
+                        {"label": "KKR vs PBKS — Rinku Six Thriller 2022",     "value": "kkr_vs_pbks_last_ball_2022"},
+                        {"label": "GT vs RR — IPL 2022 Final (Debut Season)",  "value": "gt_vs_rr_2022_final"},
+                    ],
+                    value="csk_vs_mi_2019_final",
+                    clearable=False,
+                    style={"background": "#161B22", "color": COLORS["text"],
+                           "minWidth": "340px"},
+                ),
+            ], style={"flex": "0 0 auto"}),
+            # Speed
+            html.Div([
+                html.Div("REPLAY SPEED", style={"color": COLORS["muted"], "fontSize": "9px",
+                    "letterSpacing": "2px", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="replay-speed",
+                    options=[
+                        {"label": "0.5× (Cinematic)", "value": 0.5},
+                        {"label": "1× (Normal)",      "value": 1.0},
+                        {"label": "2× (Fast)",        "value": 2.0},
+                    ],
+                    value=1.0, clearable=False,
+                    style={"background": "#161B22", "color": COLORS["text"],
+                           "minWidth": "160px"},
+                ),
+            ], style={"flex": "0 0 auto"}),
+            # Buttons
+            html.Div([
+                html.Div("\u00a0", style={"fontSize": "9px", "marginBottom": "6px"}),
+                html.Div([
+                    html.Button(
+                        "▶ START REPLAY", id="replay-start-btn", n_clicks=0,
+                        style={
+                            "background": f"linear-gradient(135deg, {COLORS['Neutral']}, #b88500)",
+                            "color": "#0D1117", "border": "none",
+                            "borderRadius": "8px", "padding": "10px 18px",
+                            "fontWeight": "800", "fontSize": "12px",
+                            "cursor": "pointer", "letterSpacing": "1px",
+                            "fontFamily": "'Syne', sans-serif",
+                            "marginRight": "8px",
+                        },
+                    ),
+                    html.Button(
+                        "⏹ STOP", id="replay-stop-btn", n_clicks=0,
+                        style={
+                            "background": "#FF475720", "color": COLORS["Negative"],
+                            "border": f"1px solid {COLORS['Negative']}",
+                            "borderRadius": "8px", "padding": "10px 18px",
+                            "fontWeight": "700", "fontSize": "12px",
+                            "cursor": "pointer", "letterSpacing": "1px",
+                        },
+                    ),
+                ], style={"display": "flex"}),
+            ]),
+        ], style={"display": "flex", "gap": "16px", "flexWrap": "wrap",
+                  "alignItems": "flex-end", "marginBottom": "16px"}),
+
+        # Replay status bar
+        html.Div(id="replay-status", children="Select a match and press START REPLAY", style={
+            "color": COLORS["muted"], "fontSize": "11px",
+            "marginBottom": "12px", "fontStyle": "italic",
+        }),
+
+        # Replay feed (cinematic commentary)
+        html.Div(id="replay-feed", style={
+            "maxHeight": "320px", "overflowY": "auto",
+        }),
+
+    ], style={
+        **CARD_STYLE,
+        "margin": "0 20px 24px",
+        "background": "#0D1117",
+        "border": f"1px solid {COLORS['Neutral']}40",
     }),
 
 ], style={
@@ -805,6 +1116,253 @@ def refresh_ai_panels(_n):
     )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# PHASE 5 — CALLBACK 1: Interactive Prediction + Explainability
+# ──────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("ip-result-header", "children"),
+    Output("ip-bar-a-label",   "children"),
+    Output("ip-bar-a",         "style"),
+    Output("ip-bar-b-label",   "children"),
+    Output("ip-bar-b",         "style"),
+    Output("ip-pills",         "children"),
+    Output("ip-conf-pct",      "children"),
+    Output("ip-conf-bar",      "style"),
+    Output("ip-data-quality",  "children"),
+    Output("ip-reasons",       "children"),
+    Output("ip-counter",       "children"),
+    Input("predict-btn",       "n_clicks"),
+    State("ip-team-a",         "value"),
+    State("ip-team-b",         "value"),
+    State("ip-venue",          "value"),
+    State("ip-toss",           "value"),
+    prevent_initial_call=True,
+)
+def run_interactive_prediction(n_clicks, team_a, team_b, venue, toss):
+    if not team_a or not team_b or team_a == team_b:
+        return ("⚠ Pick two different teams.",
+                [], {}, [], {}, [], "—", {"width": "0%"}, "", [], [])
+
+    toss_val = 1 if toss == "a" else (0 if toss == "b" else 0)
+    payload  = {"team": team_a, "opponent": team_b, "venue": venue, "toss_won": toss_val}
+
+    def _pill_s(text, color):
+        return html.Span(text, style={
+            "background": f"{color}20", "color": color,
+            "border": f"1px solid {color}", "borderRadius": "20px",
+            "padding": "3px 12px", "fontSize": "11px", "fontWeight": "700",
+        })
+
+    try:
+        from modules.ai.predictor import predict_match
+        from modules.ai.explainer import generate_explanation
+        pred    = predict_match(payload)
+        explain = generate_explanation(payload, pred)
+        prob_a  = pred["team_win_prob"]
+        prob_b  = pred["opponent_win_prob"]
+
+        bar_base = {"height": "10px", "borderRadius": "5px",
+                    "marginBottom": "14px", "transition": "width 1s ease"}
+
+        header = f"🏏 {team_a} vs {team_b}  ·  {venue}  ·  {pred['momentum']}"
+        label_a = [
+            html.Span(f"🏏 {team_a}", style={"color": COLORS["Positive"], "fontWeight": "700"}),
+            html.Span(f"{prob_a}%",   style={"color": COLORS["Positive"], "fontWeight": "800",
+                                              "fontFamily": "'Syne', sans-serif", "fontSize": "18px"}),
+        ]
+        label_b = [
+            html.Span(f"🏏 {team_b}", style={"color": COLORS["Negative"], "fontWeight": "700"}),
+            html.Span(f"{prob_b}%",   style={"color": COLORS["Negative"], "fontWeight": "800",
+                                              "fontFamily": "'Syne', sans-serif", "fontSize": "18px"}),
+        ]
+        style_a = {**bar_base, "width": f"{prob_a}%",
+                   "background": f"linear-gradient(90deg, {COLORS['Positive']}, #00b371)"}
+        style_b = {**bar_base, "width": f"{prob_b}%",
+                   "background": f"linear-gradient(90deg, {COLORS['Negative']}, #b30000)"}
+
+        pills = [
+            _pill_s(f"🎯 {pred['confidence']} Confidence", "#58A6FF"),
+            _pill_s(f"📊 {pred['momentum']}", COLORS["Neutral"]),
+            _pill_s(f"⚙ {pred['model_backend']}", COLORS["muted"]),
+        ]
+
+        conf_pct  = explain["confidence_pct"]
+        conf_bar  = {"height": "4px", "borderRadius": "2px", "marginTop": "4px",
+                     "background": "linear-gradient(90deg, #58A6FF, #0066FF)",
+                     "width": f"{conf_pct}%", "transition": "width 1s ease"}
+        dq        = f"📡 Data quality: {explain['data_quality']}"
+        reasons   = [html.Li(r) for r in explain["reasons"]]
+        counter   = [html.Li(c) for c in explain["counter_reasons"]]
+
+        return (header, label_a, style_a, label_b, style_b,
+                pills, f"{conf_pct}%", conf_bar, dq, reasons, counter)
+
+    except Exception as exc:
+        logger.warning(f"[interactive predict] {exc}")
+        return (f"⚠ Error: {exc}", [], {}, [], {}, [], "—", {"width": "0%"}, "", [], [])
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PHASE 5 — CALLBACK 2: Social Sentiment Stream (8-second refresh)
+# ──────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("fan-stream-feed", "children"),
+    Input("stream-refresh-interval", "n_intervals"),
+)
+def refresh_fan_stream(_n):
+    try:
+        from modules.ai.stream_replay import get_stream_items
+        items = get_stream_items(12)
+        if not items:
+            return [html.Div("Buffering stream…", style={"color": COLORS["muted"],
+                                                          "fontSize": "12px"})]
+        cards = []
+        SENT_COLOR = {"Positive": COLORS["Positive"],
+                      "Negative": COLORS["Negative"],
+                      "Neutral":  COLORS["Neutral"]}
+        SOURCE_CLR = {"Reddit": "#FF4500", "YouTube": "#FF0000",
+                      "Match Thread": "#58A6FF", "Historical Replay": "#FFD166"}
+        for item in items:
+            sc   = SOURCE_CLR.get(item["source"], "#888")
+            sent = item["sentiment"]
+            tc   = SENT_COLOR.get(sent, COLORS["muted"])
+            eng  = item["engagement"]
+            eng_str = f"{eng/1000:.1f}k" if eng >= 1000 else str(eng)
+            cards.append(html.Div([
+                # Source + timestamp
+                html.Div([
+                    html.Span(item["source"], style={
+                        "background": f"{sc}20", "color": sc,
+                        "border": f"1px solid {sc}", "borderRadius": "10px",
+                        "padding": "1px 7px", "fontSize": "9px", "fontWeight": "700",
+                        "marginRight": "6px",
+                    }),
+                    html.Span(item["timestamp"], style={
+                        "color": COLORS["muted"], "fontSize": "10px",
+                    }),
+                ], style={"marginBottom": "5px", "display": "flex", "alignItems": "center"}),
+                # Comment text
+                html.Div(item["text"], style={
+                    "color": COLORS["text"], "fontSize": "12px",
+                    "lineHeight": "1.5", "marginBottom": "6px",
+                }),
+                # Sentiment + engagement
+                html.Div([
+                    html.Span(sent, style={
+                        "background": f"{tc}20", "color": tc,
+                        "border": f"1px solid {tc}", "borderRadius": "10px",
+                        "padding": "1px 7px", "fontSize": "9px", "fontWeight": "700",
+                        "marginRight": "6px",
+                    }),
+                    html.Span(f"♥ {eng_str}", style={
+                        "color": COLORS["muted"], "fontSize": "10px",
+                    }),
+                ], style={"display": "flex", "alignItems": "center"}),
+            ], style={
+                **CARD_STYLE,
+                "padding": "10px 12px", "marginBottom": "8px",
+                "borderLeft": f"3px solid {sc}", "borderRadius": "8px",
+                "animation": "fadeIn 0.4s ease",
+            }))
+        return cards
+    except Exception as exc:
+        logger.warning(f"[stream callback] {exc}")
+        return [html.Div("Stream loading…", style={"color": COLORS["muted"]})]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PHASE 5 — CALLBACK 3: Historical Match Replay
+# ──────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("replay-status",    "children"),
+    Output("replay-feed",      "children"),
+    Output("replay-interval",  "disabled"),
+    Input("replay-start-btn",  "n_clicks"),
+    Input("replay-stop-btn",   "n_clicks"),
+    Input("replay-interval",   "n_intervals"),
+    State("replay-match-select","value"),
+    State("replay-speed",      "value"),
+    State("replay-feed",       "children"),
+    prevent_initial_call=True,
+)
+def handle_replay(start_clicks, stop_clicks, _n_intervals,
+                  match_id, speed, current_feed):
+    from dash import ctx
+    triggered = ctx.triggered_id if ctx.triggered_id else ""
+    current_feed = current_feed or []
+
+    from modules.ai.match_replay import (
+        start_replay, get_replay_next_moment,
+        reset_replay, get_replay_state,
+    )
+
+    SENT_COLOR = {"Positive": COLORS["Positive"],
+                  "Negative": COLORS["Negative"],
+                  "Neutral":  COLORS["Neutral"]}
+
+    # ── STOP ─────────────────────────────────────────────────────────────────
+    if triggered == "replay-stop-btn":
+        reset_replay()
+        return "⏹ Replay stopped.", [], True
+
+    # ── START ─────────────────────────────────────────────────────────────────
+    if triggered == "replay-start-btn":
+        result = start_replay(match_id, float(speed or 1.0))
+        if "error" in result:
+            return f"⚠ {result['error']}", [], True
+        status = f"▶ Replaying: {result['match']}  ({result['total_moments']} moments)"
+        interval_ms = int(4000 / float(speed or 1.0))
+        return status, [], False
+
+    # ── TICK (interval fired) ──────────────────────────────────────────────────
+    if triggered == "replay-interval":
+        state = get_replay_state()
+        if not state["active"]:
+            return "✅ Replay complete.", current_feed, True
+
+        moment = get_replay_next_moment()
+        if moment is None or moment.get("done"):
+            result_txt = moment.get("result", "Match complete") if moment else ""
+            return f"🏆 {result_txt}", current_feed, True
+
+        tc   = SENT_COLOR.get(moment.get("sentiment", "Neutral"), COLORS["muted"])
+        team = moment.get("team", "")
+        prog = moment.get("progress", "")
+        card = html.Div([
+            html.Div([
+                html.Span(f"Over {moment['over']}", style={
+                    "color": COLORS["muted"], "fontSize": "10px",
+                    "marginRight": "10px", "fontFamily": "'DM Mono', monospace",
+                }),
+                html.Span(team, style={
+                    "color": COLORS.get(team, "#888"), "fontSize": "10px",
+                    "fontWeight": "700", "marginRight": "10px",
+                }),
+                html.Span(prog, style={
+                    "color": COLORS["muted"], "fontSize": "9px",
+                }),
+            ], style={"marginBottom": "4px", "display": "flex", "alignItems": "center"}),
+            html.Div(moment["text"], style={
+                "color": COLORS["text"], "fontSize": "13px",
+                "lineHeight": "1.5", "fontWeight": "600",
+            }),
+        ], style={
+            **CARD_STYLE,
+            "padding": "10px 14px", "marginBottom": "8px",
+            "borderLeft": f"4px solid {tc}", "borderRadius": "8px",
+            "animation": "fadeIn 0.5s ease",
+        })
+
+        # Prepend new moment at top
+        new_feed = [card] + (current_feed[:18] if isinstance(current_feed, list) else [])
+        idx  = state.get("current_idx", 0)
+        tot  = len(state.get("moments", []))
+        pct  = int(idx / max(tot, 1) * 100)
+        status = f"▶ Replaying: {state.get('title','...')}  — {pct}% complete"
+        return status, new_feed, False
+
+    return "Select a match and press START REPLAY.", current_feed, True
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # STARTUP
@@ -813,6 +1371,7 @@ def main():
     init_db()
     bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
     start_streamer(bearer_token)
+    start_stream_replay()          # Phase 5: fan reaction stream
 
     started = start_poller()
     if started:
