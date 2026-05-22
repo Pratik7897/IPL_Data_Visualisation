@@ -266,24 +266,7 @@ app.layout = html.Div([
     # ── Interval ──
     dcc.Interval(id="refresh-interval", interval=5000, n_intervals=0),
 
-    # ── CSS ──
-    html.Style("""
-        body { background: #0D1117 !important; }
-        * { box-sizing: border-box; }
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-track { background: #0D1117; }
-        ::-webkit-scrollbar-thumb { background: #21262D; border-radius: 4px; }
-        @keyframes pulse {
-            0%,100% { opacity: 1; }
-            50%      { opacity: 0.3; }
-        }
-        .Select-control, .Select-menu-outer {
-            background: #161B22 !important;
-            border-color: #21262D !important;
-            color: #E6EDF3 !important;
-        }
-        .Select-value-label { color: #E6EDF3 !important; }
-    """),
+    # ── CSS injected via assets/custom.css ──
 
 ], style={"background": COLORS["bg"], "minHeight": "100vh",
           "fontFamily": "'DM Mono', monospace"})
