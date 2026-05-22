@@ -1,6 +1,6 @@
 """
 Sentiment analysis using cardiffnlp/twitter-roberta-base-sentiment.
-Handles batching, caching, and IPL entity detection.
+Handles batching, caching, IPL entity detection, and Hinglish override.
 """
 import re
 import logging
@@ -94,10 +94,15 @@ def get_pipeline():
 # Fallback: simple keyword sentiment
 _POS_WORDS = {"great", "amazing", "brilliant", "love", "won", "win",
               "six", "century", "milestone", "superb", "fantastic",
-              "beast", "king", "legend", "fire", "🔥", "💯", "❤"}
+              "beast", "king", "legend", "fire", "🔥", "💯", "❤",
+              # Hinglish
+              "mast", "ekdum", "shandar", "zabardast", "wah", "jai",
+              "kamaal", "lajawaab", "dhamaka", "thala"}
 _NEG_WORDS = {"lost", "loss", "wicket", "out", "terrible", "awful",
               "disappointed", "disaster", "dropped", "injured", "bad",
-              "worst", "😢", "😡", "💔", "👎"}
+              "worst", "😢", "😡", "💔", "👎",
+              # Hinglish
+              "bekar", "bakwaas", "haar", "ghatiya", "kharab", "nalayak"}
 
 LABEL_MAP = {
     "LABEL_0": "Negative",
@@ -118,18 +123,33 @@ def _fallback_sentiment(text: str):
 
 
 def analyze(text: str):
-    """Return (label, confidence_score) for a single tweet text."""
-    pipe = get_pipeline()
+    """Return (label, confidence_score) for a single tweet text.
+
+    Pipeline:
+      1. Hinglish keyword override  → instant, no model needed
+      2. HuggingFace RoBERTa model  → high-accuracy English
+      3. Fallback keyword scorer    → if model unavailable
+    """
+    # ── Phase 2C: Hinglish pre-screen ──
+    try:
+        from modules.hinglish import hinglish_override
+        override = hinglish_override(text)
+        if override is not None:
+            return override, 0.82   # keyword confidence proxy
+    except ImportError:
+        pass
+
+    pipe    = get_pipeline()
     cleaned = clean_tweet(text)
 
     if pipe == "fallback" or not cleaned:
         return _fallback_sentiment(text)
 
     try:
-        result = pipe(cleaned)[0]
+        result    = pipe(cleaned)[0]
         raw_label = result["label"]
-        score = round(result["score"], 4)
-        label = LABEL_MAP.get(raw_label, raw_label)
+        score     = round(result["score"], 4)
+        label     = LABEL_MAP.get(raw_label, raw_label)
         return label, score
     except Exception as exc:
         logger.debug(f"Inference error: {exc}")

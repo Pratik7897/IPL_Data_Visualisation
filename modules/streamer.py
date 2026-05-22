@@ -262,6 +262,22 @@ DEMO_TWEETS = [
     ("End of over 15: RCB 122/4, Maxwell on 67* off 38 balls! #IPL2025", "RCB"),
     ("WICKET!! Bumrah strikes again, Ruturaj clean bowled! #MIvsCSK 🔥", "MI"),
     ("That SIX by Russell nearly hit the commentary box! KKR crowd going crazy!", "KKR"),
+    # Hinglish tweets (Phase 2C)
+    ("Bumrah ekdum mast bowling kar raha hai aaj! 🔥 #MI zabardast!", "MI"),
+    ("Yaar CSK ne kya dhamaka kiya! Dhoni bhai thoda aur khelo! #Thala", "CSK"),
+    ("KKR ki fielding bilkul bekar hai aaj 😡 yeh kya chal raha hai bhai", "KKR"),
+    ("Virat bhai ne century maari! Shandar! RCB waale khush ho jao 💯", "RCB"),
+    ("Rohit sharma wah wah! Ek dum solid innings tha yaar! #MI best", "MI"),
+    ("SRH ka batting lineup aaj bahut kharab laga yaar, haar jayenge 😢", "SRH"),
+    ("Jadeja bhai ne kya catch pakda! Kamaal ka fielder hai yeh 🙌 #CSK", "CSK"),
+    ("Dekhte hain aage kya hota hai, abhi match ka pata nahi #IPL2025", ""),
+    ("Maxwell ne zabardast chakka maara bhai! RCB fans mast ho jao! 💥", "RCB"),
+    ("Yeh toss ke baad team decide karenge, abhi sab shayad ho sakta hai", ""),
+    ("KL Rahul ekdum bindaas batting kar raha hai, LSG jeetenge aaj!", "LSG"),
+    ("Ruturaj out ho gaya yaar, bekar shot tha! CSK barbad ho rahi hai 😡", "CSK"),
+    ("Gill ne lajawaab century maari! GT ke fans josh mein hain! 🏆", "GT"),
+    ("Russell bhai khatarnak mode mein hai! KKR ka dhamaka jaari hai! 💥", "KKR"),
+    ("Narine ki bowling ekdum toofani! Behtareen spell chal raha hai! 🔥", "KKR"),
 ]
 
 
