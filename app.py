@@ -39,6 +39,7 @@ from modules.charts import (
 from modules.streamer import start_streamer, stream_status
 from modules.events_poller import start_poller, poller_status
 from modules.exporter import register_export_routes
+from modules.ai_routes import register_ai_routes
 
 # ── App init ───────────────────────────────────────────────────────────────────
 app = dash.Dash(
@@ -52,6 +53,7 @@ app = dash.Dash(
 )
 server = app.server
 register_export_routes(server)   # Phase 3C — /export/{csv,json,events,summary,health}
+register_ai_routes(server)       # Phase 4  — /predict-match, /generate-summary, /player-rankings …
 
 # ──────────────────────────────────────────────────────────────────────────────
 # HELPERS
@@ -436,8 +438,111 @@ app.layout = html.Div([
         "alignItems": "flex-start",
     }),
 
-    # ── Interval ──────────────────────────────────────────────────────────────
-    dcc.Interval(id="refresh-interval", interval=5000, n_intervals=0),
+    # ── Intervals ─────────────────────────────────────────────────────────────
+    dcc.Interval(id="refresh-interval",    interval=5000,  n_intervals=0),
+    dcc.Interval(id="ai-refresh-interval", interval=30000, n_intervals=0),
+
+    # ── PHASE 4 — AI FEATURE ROW ──────────────────────────────────────────────
+    html.Div([
+
+        # ── CARD 1: MATCH WIN PROBABILITY ─────────────────────────────────────
+        html.Div([
+            html.Div("MATCH WIN PROBABILITY", style={
+                "color": COLORS["muted"], "fontSize": "10px",
+                "textTransform": "uppercase", "letterSpacing": "2px",
+                "marginBottom": "14px", "fontWeight": "700",
+            }),
+            # Team A
+            html.Div(style={"display": "flex", "justifyContent": "space-between",
+                            "marginBottom": "6px"}, children=[
+                html.Span(id="pred-team-a-name",
+                          style={"color": COLORS["Positive"], "fontWeight": "700", "fontSize": "14px"}),
+                html.Span("—", id="pred-team-a-pct",
+                          style={"color": COLORS["Positive"], "fontWeight": "800",
+                                 "fontSize": "20px", "fontFamily": "'Syne', sans-serif"}),
+            ]),
+            html.Div(id="pred-bar-a", style={
+                "height": "8px", "borderRadius": "4px", "marginBottom": "14px",
+                "background": f"linear-gradient(90deg, {COLORS['Positive']}, #00b371)",
+                "width": "50%", "transition": "width 0.8s ease",
+            }),
+            # Team B
+            html.Div(style={"display": "flex", "justifyContent": "space-between",
+                            "marginBottom": "6px"}, children=[
+                html.Span(id="pred-team-b-name",
+                          style={"color": COLORS["Negative"], "fontWeight": "700", "fontSize": "14px"}),
+                html.Span("—", id="pred-team-b-pct",
+                          style={"color": COLORS["Negative"], "fontWeight": "800",
+                                 "fontSize": "20px", "fontFamily": "'Syne', sans-serif"}),
+            ]),
+            html.Div(id="pred-bar-b", style={
+                "height": "8px", "borderRadius": "4px", "marginBottom": "16px",
+                "background": f"linear-gradient(90deg, {COLORS['Negative']}, #b30000)",
+                "width": "50%", "transition": "width 0.8s ease",
+            }),
+            # Confidence + Momentum pills
+            html.Div(id="pred-meta", style={"display": "flex", "gap": "8px", "flexWrap": "wrap"}),
+        ], style={**CARD_STYLE, "flex": "1", "minWidth": "260px",
+                  "background": "#0D1117",
+                  "border": f"1px solid {COLORS['Positive']}40"}),
+
+        # ── CARD 2: AI MATCH INSIGHTS ─────────────────────────────────────────
+        html.Div([
+            html.Div("AI MATCH INSIGHTS", style={
+                "color": COLORS["muted"], "fontSize": "10px",
+                "textTransform": "uppercase", "letterSpacing": "2px",
+                "marginBottom": "10px", "fontWeight": "700",
+            }),
+            html.Div(id="ai-provider-badge", style={
+                "fontSize": "10px", "color": "#58A6FF",
+                "marginBottom": "10px", "letterSpacing": "1px",
+            }),
+            html.Div(id="ai-short-summary", style={
+                "fontSize": "14px", "color": COLORS["text"],
+                "lineHeight": "1.6", "marginBottom": "12px",
+                "borderLeft": f"3px solid {COLORS['Positive']}",
+                "paddingLeft": "10px", "fontStyle": "italic",
+            }),
+            html.Div("KEY MOMENTS", style={
+                "color": COLORS["muted"], "fontSize": "9px",
+                "letterSpacing": "2px", "textTransform": "uppercase",
+                "marginBottom": "6px",
+            }),
+            html.Ul(id="ai-key-moments", style={
+                "paddingLeft": "16px", "margin": "0",
+                "color": COLORS["text"], "fontSize": "12px", "lineHeight": "1.8",
+            }),
+            html.Div(id="ai-fan-reaction", style={
+                "marginTop": "10px", "fontSize": "12px",
+                "color": COLORS["muted"], "lineHeight": "1.5",
+            }),
+        ], style={**CARD_STYLE, "flex": "2", "minWidth": "320px",
+                  "background": "#0D1117",
+                  "border": "1px solid #58A6FF40"}),
+
+        # ── CARD 3: PLAYER POPULARITY INDEX ──────────────────────────────────
+        html.Div([
+            html.Div("PLAYER POPULARITY INDEX", style={
+                "color": COLORS["muted"], "fontSize": "10px",
+                "textTransform": "uppercase", "letterSpacing": "2px",
+                "marginBottom": "14px", "fontWeight": "700",
+            }),
+            html.Div(id="player-leaderboard"),
+            html.Div(id="trending-player-banner", style={
+                "marginTop": "10px", "padding": "8px 12px",
+                "background": "#FFD16610",
+                "border": f"1px solid {COLORS['Neutral']}",
+                "borderRadius": "8px", "fontSize": "11px",
+                "color": COLORS["Neutral"], "fontWeight": "700",
+            }),
+        ], style={**CARD_STYLE, "flex": "1", "minWidth": "260px",
+                  "background": "#0D1117",
+                  "border": f"1px solid {COLORS['Neutral']}40"}),
+
+    ], style={
+        "display": "flex", "gap": "16px", "flexWrap": "wrap",
+        "padding": "0 20px 24px", "alignItems": "flex-start",
+    }),
 
 ], style={
     "background": COLORS["bg"],
@@ -557,6 +662,148 @@ def log_event(n_clicks, event_type, player):
     now_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
     emoji   = EVENT_EMOJI.get(event_type, "•")
     return f"💥 {event_type.upper()} logged — {now_str}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PHASE 4 — AI FEATURES CALLBACK  (30-second refresh)
+# ──────────────────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("pred-team-a-name",       "children"),
+    Output("pred-team-a-pct",        "children"),
+    Output("pred-bar-a",             "style"),
+    Output("pred-team-b-name",       "children"),
+    Output("pred-team-b-pct",        "children"),
+    Output("pred-bar-b",             "style"),
+    Output("pred-meta",              "children"),
+    Output("ai-provider-badge",      "children"),
+    Output("ai-short-summary",       "children"),
+    Output("ai-key-moments",         "children"),
+    Output("ai-fan-reaction",        "children"),
+    Output("player-leaderboard",     "children"),
+    Output("trending-player-banner", "children"),
+    Input("ai-refresh-interval",     "n_intervals"),
+)
+def refresh_ai_panels(_n):
+    """Updates all three AI feature cards every 30 seconds."""
+
+    def _pill(text, color, bg="#ffffff10"):
+        return html.Span(text, style={
+            "background": bg, "color": color,
+            "border": f"1px solid {color}", "borderRadius": "20px",
+            "padding": "2px 10px", "fontSize": "10px", "fontWeight": "700",
+        })
+
+    # ── Feature 1: Match Win Probability ─────────────────────────────────────
+    try:
+        from modules.ai.predictor import predict_match
+        team_data   = fetch_team_sentiment_counts()
+        team_totals: dict = {}
+        for r in team_data:
+            t = r.get("team_mention") or ""
+            if t:
+                team_totals[t] = team_totals.get(t, 0) + r["count"]
+        ranked = sorted(team_totals, key=team_totals.get, reverse=True)
+        team_a = ranked[0] if len(ranked) > 0 else "MI"
+        team_b = ranked[1] if len(ranked) > 1 else "CSK"
+
+        pred   = predict_match({"team": team_a, "opponent": team_b})
+        prob_a = pred["team_win_prob"]
+        prob_b = pred["opponent_win_prob"]
+
+        bar_base = {"height": "8px", "borderRadius": "4px",
+                    "marginBottom": "14px", "transition": "width 0.8s ease"}
+        bar_a_style = {**bar_base, "width": f"{prob_a}%",
+                       "background": f"linear-gradient(90deg, {COLORS['Positive']}, #00b371)"}
+        bar_b_style = {**bar_base, "width": f"{prob_b}%",
+                       "background": f"linear-gradient(90deg, {COLORS['Negative']}, #b30000)"}
+        meta_pills  = [
+            _pill(f"🎯 Confidence: {pred['confidence']}", "#58A6FF"),
+            _pill(f"📊 {pred['momentum']}", COLORS["Neutral"]),
+            _pill(f"⚙ {pred['model_backend']}", COLORS["muted"]),
+        ]
+        pred_a_name = f"🏏 {team_a}"; pred_b_name = f"🏏 {team_b}"
+        pred_a_pct  = f"{prob_a}%";  pred_b_pct  = f"{prob_b}%"
+
+    except Exception as exc:
+        logger.warning(f"[AI callback] predictor error: {exc}")
+        pred_a_name = "Team A"; pred_b_name = "Team B"
+        pred_a_pct  = "—";      pred_b_pct  = "—"
+        bar_a_style = {"width": "50%"}; bar_b_style = {"width": "50%"}
+        meta_pills  = [_pill("⚠ Loading model…", COLORS["muted"])]
+
+    # ── Feature 2: AI Match Summary ───────────────────────────────────────────
+    try:
+        from modules.ai.summarizer import generate_summary
+        summary        = generate_summary()
+        provider_badge = f"⚡ {summary.get('generated_by', 'Template Engine')}"
+        short_summary  = summary.get("short_summary", "Generating summary…")
+        key_moments    = [html.Li(m) for m in summary.get("key_moments", [])]
+        fan_reaction   = f"💬 {summary.get('fan_reaction', '')}"
+    except Exception as exc:
+        logger.warning(f"[AI callback] summarizer error: {exc}")
+        provider_badge = "⚠ Summary unavailable"
+        short_summary  = "Could not generate summary at this time."
+        key_moments    = []; fan_reaction = ""
+
+    # ── Feature 3: Player Popularity Index ───────────────────────────────────
+    try:
+        from modules.ai.player_index import compute_player_rankings, get_top_trending
+        rankings = compute_player_rankings()[:8]
+        trending = get_top_trending()
+
+        TREND_COLOR = {
+            "↑↑ Trending": COLORS["Positive"],
+            "↑ Rising":    "#58A6FF",
+            "→ Stable":    COLORS["muted"],
+            "↓ Dropping":  COLORS["Neutral"],
+            "↓↓ Fading":   COLORS["Negative"],
+        }
+
+        leaderboard = []
+        for r in rankings:
+            tc = TREND_COLOR.get(r["trend"], COLORS["muted"])
+            leaderboard.append(html.Div([
+                html.Div([
+                    html.Span(f"#{r['rank']}", style={
+                        "color": COLORS["muted"], "fontSize": "11px",
+                        "width": "24px", "display": "inline-block"}),
+                    html.Span(r["name"], style={
+                        "color": COLORS["text"], "fontSize": "12px",
+                        "fontWeight": "700", "marginRight": "6px"}),
+                    html.Span(r["team"], style={
+                        "color": COLORS.get(r["team"], "#888"), "fontSize": "10px"}),
+                ]),
+                html.Div([
+                    html.Div(style={
+                        "height": "4px", "borderRadius": "2px",
+                        "background": f"linear-gradient(90deg, {tc}, {tc}60)",
+                        "width": f"{r['popularity']}%",
+                        "display": "inline-block", "verticalAlign": "middle",
+                        "marginRight": "6px", "transition": "width 0.6s ease"}),
+                    html.Span(f"{r['popularity']:.0f}", style={
+                        "color": tc, "fontSize": "11px",
+                        "fontWeight": "700", "fontFamily": "'Syne', sans-serif"}),
+                    html.Span(f" {r['trend']}", style={"color": tc, "fontSize": "10px"}),
+                ]),
+            ], style={"marginBottom": "10px"}))
+
+        trending_banner = (
+            f"🔥 NOW TRENDING: {trending.get('player', '—')} "
+            f"({trending.get('team', '')}) — {trending.get('trend', '')}"
+        )
+    except Exception as exc:
+        logger.warning(f"[AI callback] player_index error: {exc}")
+        leaderboard = [html.Div("Loading player data…", style={"color": COLORS["muted"]})]
+        trending_banner = "⚡ Player data loading…"
+
+    return (
+        pred_a_name, pred_a_pct, bar_a_style,
+        pred_b_name, pred_b_pct, bar_b_style,
+        meta_pills,
+        provider_badge, short_summary, key_moments, fan_reaction,
+        leaderboard, trending_banner,
+    )
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
