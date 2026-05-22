@@ -1,6 +1,13 @@
 """
 Tweepy v2 Filtered Stream for IPL tweet ingestion.
 Falls back to a demo data generator when no API keys are configured.
+
+Phase 2A — Auto-reconnect:
+  • IPLStreamSupervisor wraps the bare stream in a while-True supervisor loop
+    with exponential back-off + jitter (cap: 5 min).
+  • A threading.Event lets the supervisor be stopped cleanly.
+  • StreamStatus is a module-level singleton the dashboard can query to show
+    connection state in the header.
 """
 import os
 import time
@@ -11,21 +18,61 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# ── IPL stream rules ───────────────────────────────────────────────────────────
+# ── IPL stream rules ────────────────────────────────────────────────────────────
 STREAM_RULES = [
-    {"value": "#IPL2025 -is:retweet lang:en",   "tag": "ipl_main"},
-    {"value": "#MIvsCSK OR #CSKvsMI -is:retweet lang:en", "tag": "mi_csk"},
-    {"value": "#RCB OR #KKR -is:retweet lang:en", "tag": "rcb_kkr"},
+    {"value": "#IPL2025 -is:retweet lang:en",            "tag": "ipl_main"},
+    {"value": "#MIvsCSK OR #CSKvsMI -is:retweet lang:en","tag": "mi_csk"},
+    {"value": "#RCB OR #KKR -is:retweet lang:en",        "tag": "rcb_kkr"},
     {"value": "#Kohli OR #Dhoni OR #Bumrah -is:retweet lang:en", "tag": "players"},
-    {"value": "#IPLfinal OR #IPL2025final -is:retweet lang:en", "tag": "final"},
+    {"value": "#IPLfinal OR #IPL2025final -is:retweet lang:en",  "tag": "final"},
 ]
 
 TWEET_FIELDS = "id,text,author_id,created_at,lang,public_metrics"
 
+# Back-off parameters
+_BACKOFF_BASE    = 5    # seconds for first retry
+_BACKOFF_MAX     = 300  # 5 minutes cap
+_BACKOFF_FACTOR  = 2    # multiply each failure
+_BACKOFF_JITTER  = 5    # ±seconds of random jitter
 
-# ── Real Tweepy stream ─────────────────────────────────────────────────────────
+
+# ── Module-level stream status (queryable from the dashboard) ───────────────────
+class StreamStatus:
+    """Thread-safe singleton tracking connection state."""
+
+    def __init__(self):
+        self._lock     = threading.Lock()
+        self.mode      = "idle"          # "demo" | "live" | "reconnecting" | "idle"
+        self.connected = False
+        self.attempts  = 0
+        self.last_ok   = None            # datetime of last successful connect
+        self.last_err  = None            # last exception string
+        self.next_retry_in = 0           # seconds until next reconnect attempt
+
+    def set(self, **kwargs):
+        with self._lock:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "mode":          self.mode,
+                "connected":     self.connected,
+                "attempts":      self.attempts,
+                "last_ok":       self.last_ok,
+                "last_err":      self.last_err,
+                "next_retry_in": self.next_retry_in,
+            }
+
+
+# Singleton — import from here in app.py
+stream_status = StreamStatus()
+
+
+# ── Real Tweepy stream ──────────────────────────────────────────────────────────
 class IPLStreamListener:
-    """Tweepy v2 StreamingClient subclass."""
+    """Thin wrapper around tweepy.StreamingClient."""
 
     def __init__(self):
         try:
@@ -36,42 +83,136 @@ class IPLStreamListener:
             raise
 
     def build_client(self, bearer_token: str):
-        class _Listener(self._tweepy.StreamingClient):
+        tweepy = self._tweepy
+
+        class _Listener(tweepy.StreamingClient):
             def on_tweet(inner_self, tweet):
                 _process_tweet(
                     tweet_id=str(tweet.id),
                     text=tweet.text,
                     author=str(tweet.author_id),
                     created_at=str(tweet.created_at),
-                    retweet_count=getattr(tweet, "public_metrics", {}).get("retweet_count", 0) if tweet.public_metrics else 0,
-                    like_count=getattr(tweet, "public_metrics", {}).get("like_count", 0) if tweet.public_metrics else 0,
+                    retweet_count=(tweet.public_metrics or {}).get("retweet_count", 0),
+                    like_count=(tweet.public_metrics or {}).get("like_count", 0),
                 )
 
             def on_errors(inner_self, errors):
-                logger.warning(f"Stream error: {errors}")
+                logger.warning(f"Stream API error: {errors}")
 
             def on_disconnect(inner_self):
-                logger.warning("Stream disconnected.")
+                logger.warning("Stream disconnected by server.")
 
         client = _Listener(bearer_token)
 
-        # Clear + set rules
+        # Sync rules: delete old, add current
         existing = client.get_rules()
         if existing.data:
-            ids = [r.id for r in existing.data]
-            client.delete_rules(ids)
-        client.add_rules([self._tweepy.StreamRule(r["value"]) for r in STREAM_RULES])
+            client.delete_rules([r.id for r in existing.data])
+        client.add_rules([tweepy.StreamRule(r["value"]) for r in STREAM_RULES])
         return client
 
-    def start(self, bearer_token: str):
+    def connect_and_filter(self, bearer_token: str):
+        """Single connection attempt — raises on failure."""
         client = self.build_client(bearer_token)
-        logger.info("Starting real Tweepy filtered stream …")
+        logger.info("Tweepy filtered stream connecting …")
+        # filter() blocks until disconnected or an exception is raised
         client.filter(tweet_fields=TWEET_FIELDS)
 
 
+# ── Auto-reconnect supervisor ───────────────────────────────────────────────────
+class IPLStreamSupervisor:
+    """
+    Runs the Tweepy stream in a daemon thread with automatic reconnect.
+
+    Back-off schedule (each consecutive failure doubles the wait):
+        attempt 1 →  5s ± jitter
+        attempt 2 → 10s ± jitter
+        attempt 3 → 20s ± jitter
+        …
+        attempt N → 300s (cap) ± jitter
+    A successful connection resets the back-off to the base value.
+    """
+
+    def __init__(self, bearer_token: str):
+        self._token    = bearer_token
+        self._stop_evt = threading.Event()
+        self._thread   = threading.Thread(
+            target=self._supervisor_loop, daemon=True, name="ipl-stream-supervisor"
+        )
+
+    def start(self):
+        self._thread.start()
+        logger.info("IPLStreamSupervisor started.")
+
+    def stop(self):
+        """Signal the supervisor to exit cleanly."""
+        self._stop_evt.set()
+        logger.info("IPLStreamSupervisor stop requested.")
+
+    # ── internal ──────────────────────────────────────────────────────────────
+    def _supervisor_loop(self):
+        listener = IPLStreamListener()
+        backoff  = _BACKOFF_BASE
+
+        while not self._stop_evt.is_set():
+            stream_status.set(
+                mode="live",
+                connected=True,
+                last_ok=datetime.now(timezone.utc),
+                last_err=None,
+                next_retry_in=0,
+            )
+            try:
+                logger.info(
+                    f"[supervisor] Connecting to Tweepy stream "
+                    f"(attempt #{stream_status.attempts + 1}) …"
+                )
+                stream_status.set(attempts=stream_status.attempts + 1)
+                listener.connect_and_filter(self._token)
+
+                # If we reach here the stream ended without exception (server closed)
+                logger.warning("[supervisor] Stream ended cleanly — scheduling reconnect.")
+
+            except Exception as exc:
+                err_msg = str(exc)
+                logger.warning(f"[supervisor] Stream error: {err_msg}")
+                stream_status.set(connected=False, last_err=err_msg)
+
+            if self._stop_evt.is_set():
+                break
+
+            # Exponential back-off with jitter
+            jitter  = random.uniform(-_BACKOFF_JITTER, _BACKOFF_JITTER)
+            wait    = max(1, min(backoff + jitter, _BACKOFF_MAX))
+            backoff = min(backoff * _BACKOFF_FACTOR, _BACKOFF_MAX)
+
+            logger.info(
+                f"[supervisor] Reconnecting in {wait:.1f}s "
+                f"(next cap={backoff}s) …"
+            )
+            stream_status.set(mode="reconnecting", next_retry_in=round(wait))
+
+            # Sleep in 1-second chunks so stop() is responsive
+            for _ in range(int(wait)):
+                if self._stop_evt.is_set():
+                    break
+                time.sleep(1)
+                stream_status.set(next_retry_in=max(0, stream_status.next_retry_in - 1))
+
+            # Reset backoff on a long-lived connection (>60 s uptime)
+            last_ok = stream_status.last_ok
+            if last_ok and (datetime.now(timezone.utc) - last_ok).seconds > 60:
+                backoff = _BACKOFF_BASE
+                logger.info("[supervisor] Long-lived connection — back-off reset.")
+
+        stream_status.set(mode="idle", connected=False)
+        logger.info("[supervisor] Stopped.")
+
+
+# ── Tweet processing (shared by real stream + demo) ────────────────────────────
 def _process_tweet(tweet_id, text, author, created_at,
                    retweet_count=0, like_count=0):
-    """Shared processing: store + analyse."""
+    """Store + analyse a single tweet."""
     from modules.database import insert_tweet
     from modules.sentiment import analyze_and_store
 
@@ -81,7 +222,7 @@ def _process_tweet(tweet_id, text, author, created_at,
     logger.debug(f"Processed tweet {tweet_id[:8]}…")
 
 
-# ── Demo data generator ────────────────────────────────────────────────────────
+# ── Demo data generator ─────────────────────────────────────────────────────────
 DEMO_TWEETS = [
     # Positive
     ("Bumrah is absolutely unplayable tonight! What a spell! 🔥 #IPL2025 #MIvsCSK", "MI"),
@@ -125,21 +266,22 @@ DEMO_TWEETS = [
 
 
 class DemoStreamer:
-    """Generates realistic fake tweets for dev/demo without real API keys."""
+    """Generates realistic synthetic tweets for dev/demo — no API key needed."""
 
-    def __init__(self, tweets_per_second=0.8):
-        self.tps = tweets_per_second
+    def __init__(self, tweets_per_second: float = 0.8):
+        self.tps      = tweets_per_second
         self._counter = 0
         self._running = False
 
     def start(self):
         self._running = True
+        stream_status.set(mode="demo", connected=True)
         logger.info("🏏 Demo streamer started — generating synthetic IPL tweets")
-        t = threading.Thread(target=self._loop, daemon=True)
-        t.start()
+        threading.Thread(target=self._loop, daemon=True, name="demo-streamer").start()
 
     def stop(self):
         self._running = False
+        stream_status.set(mode="idle", connected=False)
 
     def _loop(self):
         while self._running:
@@ -149,27 +291,29 @@ class DemoStreamer:
     def _emit(self):
         self._counter += 1
         text, _ = random.choice(DEMO_TWEETS)
-        # Sprinkle hashtags
-        text += f" #IPL2025"
-        tweet_id = f"demo_{self._counter:010d}_{int(time.time()*1000) % 100000}"
-        author = f"fan_{random.randint(1000, 9999)}"
+        text += " #IPL2025"
+        tweet_id   = f"demo_{self._counter:010d}_{int(time.time()*1000) % 100000}"
+        author     = f"fan_{random.randint(1000, 9999)}"
         created_at = datetime.now(timezone.utc).isoformat()
         _process_tweet(tweet_id, text, author, created_at,
                        retweet_count=random.randint(0, 500),
                        like_count=random.randint(0, 2000))
 
 
+# ── Public entry point ──────────────────────────────────────────────────────────
 def start_streamer(bearer_token: str = None):
-    """Start real stream if token provided, otherwise demo."""
+    """
+    Start the appropriate streamer:
+      • bearer_token present → IPLStreamSupervisor (real stream + auto-reconnect)
+      • bearer_token absent  → DemoStreamer (synthetic tweets)
+    """
     if bearer_token:
         try:
-            listener = IPLStreamListener()
-            t = threading.Thread(
-                target=listener.start, args=(bearer_token,), daemon=True)
-            t.start()
-            logger.info("Real Tweepy stream started in background thread.")
+            supervisor = IPLStreamSupervisor(bearer_token)
+            supervisor.start()
+            logger.info("Real Tweepy stream supervisor started.")
         except Exception as exc:
-            logger.warning(f"Real stream failed ({exc}), falling back to demo.")
+            logger.warning(f"Real stream init failed ({exc}), falling back to demo.")
             DemoStreamer().start()
     else:
         DemoStreamer().start()

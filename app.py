@@ -35,7 +35,7 @@ from modules.charts import (
     build_volume_histogram, build_sentiment_donut, build_wordcloud_img,
     COLORS,
 )
-from modules.streamer import start_streamer
+from modules.streamer import start_streamer, stream_status
 
 # ── Bootstrap theme + custom CSS ─────────────────────────────────────────────
 app = dash.Dash(
@@ -158,7 +158,16 @@ app.layout = html.Div([
     ], style={
         "display": "flex", "justifyContent": "space-between", "alignItems": "center",
         "padding": "16px 24px", "borderBottom": f"1px solid {COLORS['border']}",
-        "background": COLORS["card"], "marginBottom": "20px",
+        "background": COLORS["card"], "marginBottom": "4px",
+    }),
+
+    # ── Stream status bar ──
+    html.Div(id="stream-status-bar", style={
+        "padding": "4px 24px",
+        "fontSize": "11px",
+        "marginBottom": "16px",
+        "borderBottom": f"1px solid {COLORS['border']}",
+        "background": COLORS["card"],
     }),
 
     # ── Body ──
@@ -287,6 +296,7 @@ app.layout = html.Div([
     Output("stat-neu",        "children"),
     Output("stat-neg",        "children"),
     Output("last-update",     "children"),
+    Output("stream-status-bar", "children"),
     Input("refresh-interval", "n_intervals"),
 )
 def refresh_dashboard(_n):
@@ -320,9 +330,41 @@ def refresh_dashboard(_n):
 
     now = datetime.utcnow().strftime("Updated %H:%M:%S UTC")
 
+    # ── Stream status badge ──
+    ss = stream_status.snapshot()
+    _mode_colors = {
+        "demo":         ("#FFD166", "⚙",  "DEMO MODE"),
+        "live":         ("#00E5A0", "●",  "LIVE"),
+        "reconnecting": ("#FF9F1C", "↺",  "RECONNECTING"),
+        "idle":         ("#888888", "○",  "IDLE"),
+    }
+    clr, ico, lbl = _mode_colors.get(ss["mode"], ("#888", "?", ss["mode"].upper()))
+    parts = [
+        html.Span(f"{ico} {lbl}", style={"color": clr, "fontWeight": "700",
+                                          "marginRight": "12px"}),
+        html.Span(f"attempts: {ss['attempts']}",
+                  style={"color": COLORS["muted"], "marginRight": "12px"}),
+    ]
+    if ss["last_ok"]:
+        parts.append(html.Span(
+            f"last ok: {ss['last_ok'].strftime('%H:%M:%S UTC')}",
+            style={"color": COLORS["muted"], "marginRight": "12px"}
+        ))
+    if ss["mode"] == "reconnecting" and ss["next_retry_in"] > 0:
+        parts.append(html.Span(
+            f"retry in {ss['next_retry_in']}s",
+            style={"color": "#FF9F1C", "fontWeight": "600"}
+        ))
+    if ss["last_err"]:
+        parts.append(html.Span(
+            f" | err: {ss['last_err'][:80]}",
+            style={"color": COLORS["Negative"], "marginLeft": "8px"}
+        ))
+    status_bar = html.Div(parts, style={"display": "flex", "alignItems": "center"})
+
     return (fig_timeline, fig_volume, fig_teams, fig_donut,
             feed, wc_pos, wc_neg,
-            stat_pos, stat_neu, stat_neg, now)
+            stat_pos, stat_neu, stat_neg, now, status_bar)
 
 
 @app.callback(
