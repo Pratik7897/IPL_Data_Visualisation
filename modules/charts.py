@@ -39,9 +39,11 @@ LAYOUT_BASE = dict(
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     font=dict(color=COLORS["text"], family="'DM Mono', 'Courier New', monospace"),
-    margin=dict(l=40, r=20, t=40, b=40),
-    legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor=COLORS["border"]),
+    # margin and legend are set per-chart to allow overrides
 )
+
+_DEFAULT_MARGIN  = dict(l=40, r=20, t=40, b=40)
+_DEFAULT_LEGEND  = dict(bgcolor="rgba(0,0,0,0)", bordercolor=COLORS["border"])
 
 AXIS_STYLE = dict(
     gridcolor=COLORS["border"],
@@ -126,37 +128,57 @@ def build_sentiment_timeseries(rows: list, events: list) -> go.Figure:
 
     fig.update_layout(
         **LAYOUT_BASE,
-        title=dict(text="📈 Live Sentiment Timeline", font=dict(size=14)),
-        xaxis=dict(**AXIS_STYLE, title="Time"),
-        yaxis=dict(**AXIS_STYLE, title="Tweet Count"),
+        xaxis=dict(**AXIS_STYLE, title=""),
+        yaxis=dict(**AXIS_STYLE, title="Count"),
         hovermode="x unified",
+        margin=dict(l=40, r=20, t=10, b=40),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=10),
+                    orientation="h", yanchor="bottom", y=-0.3,
+                    xanchor="left", x=0),
     )
     return fig
 
 
-# ── 2. Team sentiment bars ─────────────────────────────────────────────────────
+# ── 2. Team sentiment bars (HORIZONTAL — matches screenshot) ──────────────────
 def build_team_sentiment_bars(counts: list) -> go.Figure:
     if not counts:
         return _empty_fig("Waiting for team mentions …")
 
     df = pd.DataFrame(counts)
-    fig = go.Figure()
+    teams = sorted(df["team_mention"].unique())
 
+    fig = go.Figure()
     for label in ["Positive", "Neutral", "Negative"]:
-        sub = df[df["label"] == label]
+        sub = df[df["label"] == label].set_index("team_mention")
+        vals = [sub.loc[t, "count"] if t in sub.index else 0 for t in teams]
         fig.add_trace(go.Bar(
-            x=sub["team_mention"], y=sub["count"],
+            y=teams, x=vals,
             name=label,
+            orientation="h",
             marker_color=COLORS[label],
-            text=sub["count"], textposition="auto",
+            text=[str(v) if v else "" for v in vals],
+            textposition="inside",
+            textfont=dict(size=9),
         ))
 
     fig.update_layout(
         **LAYOUT_BASE,
-        title=dict(text="🏆 Team Sentiment Breakdown", font=dict(size=14)),
-        barmode="group",
-        xaxis=dict(**AXIS_STYLE, title="Team"),
-        yaxis=dict(**AXIS_STYLE, title="Tweet Count"),
+        barmode="stack",
+        xaxis=dict(**AXIS_STYLE, title="", showticklabels=False),
+        yaxis=dict(
+            gridcolor=COLORS["border"], zerolinecolor=COLORS["border"],
+            tickcolor=COLORS["muted"], tickfont=dict(size=11),
+            title="",
+        ),
+
+        legend=dict(
+            bgcolor="rgba(0,0,0,0)",
+            orientation="h",
+            yanchor="bottom", y=-0.25,
+            xanchor="left", x=0,
+            font=dict(size=10),
+        ),
+        margin=dict(l=40, r=10, t=10, b=40),
     )
     return fig
 
@@ -197,9 +219,9 @@ def build_volume_histogram(volume_rows: list, events: list) -> go.Figure:
 
     fig.update_layout(
         **LAYOUT_BASE,
-        title=dict(text="📊 Tweet Volume / Minute", font=dict(size=14)),
-        xaxis=dict(**AXIS_STYLE, title="Time"),
-        yaxis=dict(**AXIS_STYLE, title="Tweets"),
+        xaxis=dict(**AXIS_STYLE, title=""),
+        yaxis=dict(**AXIS_STYLE, title=""),
+        margin=dict(l=40, r=20, t=10, b=40),
     )
     return fig
 
@@ -227,17 +249,18 @@ def build_sentiment_donut(rows: list) -> go.Figure:
         textfont=dict(size=11),
         hoverinfo="label+value",
     ))
-    donut_layout = {**LAYOUT_BASE, "margin": dict(l=10, r=10, t=40, b=10)}
     fig.update_layout(
-        **donut_layout,
-        title=dict(text="Overall Mood", font=dict(size=13), x=0.5),
+        **LAYOUT_BASE,
+        margin=dict(l=10, r=10, t=10, b=10),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
         annotations=[dict(
             text=f"<b>{dominant}</b><br>{dom_pct}%",
             x=0.5, y=0.5, showarrow=False,
-            font=dict(size=14, color=COLORS[dominant]),
+            font=dict(size=15, color=COLORS[dominant]),
         )],
     )
     return fig
+
 
 
 # ── 5. Word cloud ──────────────────────────────────────────────────────────────
@@ -287,6 +310,8 @@ def _empty_fig(msg: str) -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
         **LAYOUT_BASE,
+        margin=dict(l=20, r=20, t=20, b=20),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
         annotations=[dict(
             text=msg, x=0.5, y=0.5, showarrow=False,
             font=dict(size=13, color=COLORS["muted"]),
@@ -296,3 +321,4 @@ def _empty_fig(msg: str) -> go.Figure:
         yaxis=dict(visible=False),
     )
     return fig
+

@@ -6,9 +6,10 @@ import os
 import sys
 import logging
 from pathlib import Path
-from datetime import datetime
+from collections import Counter
+from datetime import datetime, timezone
 
-# ── Path setup ────────────────────────────────────────────────────────────────
+# ── Path setup ─────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
@@ -18,12 +19,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ipl_dashboard")
 
-# ── Dash + Bootstrap ──────────────────────────────────────────────────────────
+# ── Dash + Bootstrap ───────────────────────────────────────────────────────────
 import dash
-from dash import dcc, html, Input, Output, State, callback_context
+from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 
-# ── Internal modules ──────────────────────────────────────────────────────────
+# ── Internal modules ───────────────────────────────────────────────────────────
 from modules.database import (
     init_db, fetch_recent_tweets_with_sentiment,
     fetch_sentiment_timeseries, fetch_match_events,
@@ -38,7 +39,7 @@ from modules.charts import (
 from modules.streamer import start_streamer, stream_status
 from modules.events_poller import start_poller, poller_status
 
-# ── Bootstrap theme + custom CSS ─────────────────────────────────────────────
+# ── App init ───────────────────────────────────────────────────────────────────
 app = dash.Dash(
     __name__,
     external_stylesheets=[
@@ -51,17 +52,37 @@ app = dash.Dash(
 server = app.server
 
 # ──────────────────────────────────────────────────────────────────────────────
-# STYLES
+# HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 CARD_STYLE = {
     "background": COLORS["card"],
     "border": f"1px solid {COLORS['border']}",
     "borderRadius": "12px",
     "padding": "16px",
-    "marginBottom": "16px",
+    "marginBottom": "12px",
 }
 
-BADGE_STYLES = {
+EVENT_EMOJI = {
+    "wicket": "🏏", "six": "💥", "four": "4️⃣",
+    "wide": "〰️",  "no_ball": "🚫", "over": "⬛",
+}
+
+EVENT_TAG_STYLE = {
+    "wicket": {"background": "#FF475720", "color": COLORS["Negative"],
+               "border": f"1px solid {COLORS['Negative']}"},
+    "six":    {"background": "#00E5A020", "color": COLORS["Positive"],
+               "border": f"1px solid {COLORS['Positive']}"},
+    "four":   {"background": "#00E5A020", "color": COLORS["Positive"],
+               "border": f"1px solid {COLORS['Positive']}"},
+    "wide":   {"background": "#FFD16620", "color": COLORS["Neutral"],
+               "border": f"1px solid {COLORS['Neutral']}"},
+    "no_ball":{"background": "#FFD16620", "color": COLORS["Neutral"],
+               "border": f"1px solid {COLORS['Neutral']}"},
+    "over":   {"background": "#21262D",   "color": COLORS["muted"],
+               "border": f"1px solid {COLORS['border']}"},
+}
+
+SENTIMENT_BADGE = {
     "Positive": {"background": "#00E5A020", "color": COLORS["Positive"],
                  "border": f"1px solid {COLORS['Positive']}"},
     "Neutral":  {"background": "#FFD16620", "color": COLORS["Neutral"],
@@ -70,331 +91,411 @@ BADGE_STYLES = {
                  "border": f"1px solid {COLORS['Negative']}"},
 }
 
-EVENT_EMOJI = {
-    "wicket": "🏏", "six": "💥", "four": "4️⃣",
-    "wide": "〰️", "no_ball": "🚫", "over": "⬛",
-}
+def _fmt_count(n: int) -> str:
+    """Format like-count: 1200 → 1.2k, 342 → 342."""
+    if n >= 1000:
+        return f"{n/1000:.1f}k"
+    return str(n)
 
-
-def _badge(text, kind="Positive"):
-    s = BADGE_STYLES.get(kind, BADGE_STYLES["Neutral"])
+def _pill(text, style_dict):
     return html.Span(text, style={
-        **s, "borderRadius": "6px", "padding": "2px 8px",
-        "fontSize": "11px", "fontWeight": "600", "marginLeft": "6px",
+        **style_dict,
+        "borderRadius": "20px", "padding": "2px 10px",
+        "fontSize": "11px", "fontWeight": "700",
     })
 
-
 def _tweet_card(tweet):
-    label = tweet.get("label") or "Neutral"
-    event = tweet.get("event_tag")
-    team  = tweet.get("team_mention")
-    likes = tweet.get("like_count", 0) or 0
-    rts   = tweet.get("retweet_count", 0) or 0
+    label  = tweet.get("label") or "Neutral"
+    event  = tweet.get("event_tag")
+    team   = tweet.get("team_mention")
+    likes  = tweet.get("like_count", 0) or 0
 
-    meta_parts = []
+    # Row 2: meta pills
+    meta = []
     if team:
-        meta_parts.append(html.Span(f"🏆 {team}", style={"color": COLORS.get(team, COLORS["muted"]), "fontSize": "11px"}))
+        meta.append(html.Span(
+            f"🏆 {team}",
+            style={"color": COLORS.get(team, COLORS["muted"]),
+                   "fontSize": "11px", "fontWeight": "600"},
+        ))
     if event:
-        meta_parts.append(html.Span(f" {EVENT_EMOJI.get(event,'•')} {event.upper()}", style={"color": COLORS["Neutral"], "fontSize": "11px"}))
+        es = EVENT_TAG_STYLE.get(event, EVENT_TAG_STYLE["over"])
+        meta.append(html.Span(
+            f"{EVENT_EMOJI.get(event,'•')} {event.upper()}",
+            style={**es, "borderRadius": "20px", "padding": "1px 8px",
+                   "fontSize": "10px", "fontWeight": "700"},
+        ))
     if likes:
-        meta_parts.append(html.Span(f"  ❤ {likes:,}", style={"color": COLORS["muted"], "fontSize": "11px"}))
-    if rts:
-        meta_parts.append(html.Span(f"  🔁 {rts:,}", style={"color": COLORS["muted"], "fontSize": "11px"}))
+        meta.append(html.Span(
+            f"♥ {_fmt_count(likes)}",
+            style={"color": COLORS["muted"], "fontSize": "11px"},
+        ))
 
     return html.Div([
+        # Tweet text + sentiment badge on same line
         html.Div([
             html.Span(tweet.get("text", ""), style={
-                "color": COLORS["text"], "fontSize": "13px", "lineHeight": "1.5",
+                "color": COLORS["text"], "fontSize": "13px",
+                "lineHeight": "1.6", "flex": "1",
             }),
-            _badge(label, label),
-        ], style={"marginBottom": "4px"}),
-        html.Div(meta_parts, style={"display": "flex", "gap": "8px", "flexWrap": "wrap"}),
+        ], style={"marginBottom": "6px"}),
+        _pill(label, SENTIMENT_BADGE.get(label, SENTIMENT_BADGE["Neutral"])),
+        html.Div(meta, style={
+            "display": "flex", "gap": "8px", "flexWrap": "wrap",
+            "alignItems": "center", "marginTop": "6px",
+        }),
     ], style={
         **CARD_STYLE,
         "padding": "12px 14px",
         "marginBottom": "8px",
         "borderLeft": f"3px solid {COLORS.get(label, '#888')}",
+        "borderRadius": "8px",
     })
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# LAYOUT
+# LAYOUT HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
-def _stat_box(label, value_id, colour):
+def _stat_box(short_label, value_id, colour):
     return html.Div([
-        html.Div(label, style={"color": COLORS["muted"], "fontSize": "11px",
-                               "textTransform": "uppercase", "letterSpacing": "1px"}),
-        html.Div(id=value_id, children="—", style={
-            "color": colour, "fontSize": "28px", "fontWeight": "800",
-            "fontFamily": "'Syne', sans-serif",
+        html.Div(short_label, style={
+            "color": COLORS["muted"], "fontSize": "10px",
+            "textTransform": "uppercase", "letterSpacing": "2px",
+            "marginBottom": "4px",
         }),
-    ], style={**CARD_STYLE, "textAlign": "center", "padding": "18px 12px"})
+        html.Div(id=value_id, children="—", style={
+            "color": colour, "fontSize": "30px", "fontWeight": "800",
+            "fontFamily": "'Syne', sans-serif", "letterSpacing": "-1px",
+        }),
+    ], style={
+        **CARD_STYLE,
+        "textAlign": "center", "padding": "16px 8px",
+        "flex": "1", "marginBottom": "0",
+    })
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# APP LAYOUT  (matches the screenshot exactly)
+# ──────────────────────────────────────────────────────────────────────────────
 app.layout = html.Div([
 
-    # ── Header ──
+    # ── HEADER ────────────────────────────────────────────────────────────────
     html.Div([
+        # Left: logo + title
         html.Div([
-            html.Span("🏏", style={"fontSize": "32px"}),
+            html.Span("🏏", style={"fontSize": "28px"}),
             html.Span(" IPL SENTIMENT", style={
                 "fontFamily": "'Syne', sans-serif", "fontWeight": "800",
-                "fontSize": "24px", "letterSpacing": "3px", "marginLeft": "10px",
+                "fontSize": "22px", "letterSpacing": "3px", "marginLeft": "8px",
                 "color": COLORS["text"],
             }),
             html.Span(" LIVE", style={
                 "fontFamily": "'Syne', sans-serif", "fontWeight": "800",
-                "fontSize": "24px", "color": COLORS["Positive"],
+                "fontSize": "22px", "color": COLORS["Positive"],
             }),
         ], style={"display": "flex", "alignItems": "center"}),
 
+        # Right: status line   "● LIVE  |  Updated HH:MM:SS UTC  |  N tweets analysed"
         html.Div([
             html.Span("● LIVE", style={
-                "color": COLORS["Positive"], "fontSize": "11px",
-                "fontWeight": "700", "animation": "pulse 1.5s infinite",
-                "marginRight": "16px",
+                "color": COLORS["Positive"], "fontSize": "12px",
+                "fontWeight": "700", "marginRight": "10px",
             }),
-            html.Span(id="last-update", style={"color": COLORS["muted"], "fontSize": "11px"}),
+            html.Span("|", style={"color": COLORS["border"], "marginRight": "10px"}),
+            html.Span(id="last-update",
+                      style={"color": COLORS["muted"], "fontSize": "12px",
+                             "marginRight": "10px"}),
+            html.Span("|", style={"color": COLORS["border"], "marginRight": "10px"}),
+            html.Span(id="tweet-total",
+                      style={"color": COLORS["muted"], "fontSize": "12px"}),
         ], style={"display": "flex", "alignItems": "center"}),
     ], style={
         "display": "flex", "justifyContent": "space-between", "alignItems": "center",
-        "padding": "16px 24px", "borderBottom": f"1px solid {COLORS['border']}",
-        "background": COLORS["card"], "marginBottom": "4px",
-    }),
-
-    # ── Stream status bar ──
-    html.Div(id="stream-status-bar", style={
-        "padding": "4px 24px",
-        "fontSize": "11px",
-        "marginBottom": "16px",
+        "padding": "14px 24px",
         "borderBottom": f"1px solid {COLORS['border']}",
         "background": COLORS["card"],
+        "marginBottom": "0",
     }),
 
-    # ── Body ──
+    # ── STREAM STATUS BAR (thin) ───────────────────────────────────────────────
+    html.Div(id="stream-status-bar", style={
+        "padding": "3px 24px",
+        "fontSize": "10px",
+        "background": "#0D1117",
+        "borderBottom": f"1px solid {COLORS['border']}",
+        "marginBottom": "16px",
+    }),
+
+    # ── BODY ──────────────────────────────────────────────────────────────────
     html.Div([
 
-        # Left column: stats + donut + team bars
+        # ── LEFT COLUMN (300px) ────────────────────────────────────────────────
         html.Div([
-            html.Div([
-                _stat_box("Positive", "stat-pos", COLORS["Positive"]),
-                _stat_box("Neutral",  "stat-neu", COLORS["Neutral"]),
-                _stat_box("Negative", "stat-neg", COLORS["Negative"]),
-            ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr 1fr", "gap": "10px"}),
 
+            # POS / NEU / NEG stat boxes
+            html.Div([
+                _stat_box("POS", "stat-pos", COLORS["Positive"]),
+                _stat_box("NEU", "stat-neu", COLORS["Neutral"]),
+                _stat_box("NEG", "stat-neg", COLORS["Negative"]),
+            ], style={"display": "flex", "gap": "8px", "marginBottom": "12px"}),
+
+            # OVERALL MOOD label
+            html.Div("OVERALL MOOD", style={
+                "color": COLORS["muted"], "fontSize": "10px",
+                "letterSpacing": "2px", "textTransform": "uppercase",
+                "marginBottom": "4px", "paddingLeft": "4px",
+            }),
             dcc.Graph(id="donut-chart", config={"displayModeBar": False},
-                      style={"height": "220px"}),
+                      style={"height": "200px", "marginBottom": "12px"}),
 
+            # TEAM SENTIMENT label
+            html.Div("TEAM SENTIMENT", style={
+                "color": COLORS["muted"], "fontSize": "10px",
+                "letterSpacing": "2px", "textTransform": "uppercase",
+                "marginBottom": "4px", "paddingLeft": "4px",
+            }),
             dcc.Graph(id="team-bars", config={"displayModeBar": False},
-                      style={"height": "260px"}),
+                      style={"height": "220px", "marginBottom": "12px"}),
 
-            # Manual event injector
+            # LOG MATCH EVENT
             html.Div([
-                html.Div("➕ Log Match Event", style={
-                    "color": COLORS["muted"], "fontSize": "11px",
-                    "textTransform": "uppercase", "letterSpacing": "1px",
+                html.Div("LOG MATCH EVENT", style={
+                    "color": COLORS["muted"], "fontSize": "10px",
+                    "textTransform": "uppercase", "letterSpacing": "2px",
                     "marginBottom": "10px",
                 }),
                 dcc.Dropdown(
                     id="event-type",
                     options=[
-                        {"label": "🏏 Wicket", "value": "wicket"},
-                        {"label": "💥 Six",    "value": "six"},
-                        {"label": "4️⃣ Four",   "value": "four"},
-                        {"label": "〰️ Wide",   "value": "wide"},
-                        {"label": "🚫 No Ball", "value": "no_ball"},
+                        {"label": "🏏 Wicket",   "value": "wicket"},
+                        {"label": "💥 Six",      "value": "six"},
+                        {"label": "4️⃣ Four",     "value": "four"},
+                        {"label": "〰️ Wide",     "value": "wide"},
+                        {"label": "🚫 No Ball",  "value": "no_ball"},
                         {"label": "⬛ Over End", "value": "over"},
                     ],
-                    placeholder="Event type …",
-                    style={"background": COLORS["bg"], "color": COLORS["text"],
-                           "marginBottom": "8px"},
+                    placeholder="Event type…",
+                    style={"marginBottom": "8px",
+                           "background": COLORS["bg"], "color": COLORS["text"]},
                 ),
-                dcc.Input(id="event-player", type="text",
-                          placeholder="Player name (optional)",
-                          style={"width": "100%", "background": COLORS["bg"],
-                                 "color": COLORS["text"], "border": f"1px solid {COLORS['border']}",
-                                 "borderRadius": "6px", "padding": "6px 10px",
-                                 "marginBottom": "8px"}),
-                html.Button("Log Event", id="log-event-btn", n_clicks=0,
-                            style={"width": "100%", "background": COLORS["Positive"],
-                                   "color": COLORS["bg"], "border": "none",
-                                   "borderRadius": "6px", "padding": "8px",
-                                   "fontWeight": "700", "cursor": "pointer"}),
-                html.Div(id="event-log-status", style={"marginTop": "8px",
-                                                        "fontSize": "12px",
-                                                        "color": COLORS["Positive"]}),
+                dcc.Input(
+                    id="event-player", type="text",
+                    placeholder="Player name (optional)",
+                    style={
+                        "width": "100%", "background": COLORS["bg"],
+                        "color": COLORS["text"],
+                        "border": f"1px solid {COLORS['border']}",
+                        "borderRadius": "6px", "padding": "6px 10px",
+                        "marginBottom": "8px", "fontSize": "13px",
+                        "fontFamily": "'DM Mono', monospace",
+                    },
+                ),
+                html.Button(
+                    "Log Event", id="log-event-btn", n_clicks=0,
+                    style={
+                        "width": "100%",
+                        "background": COLORS["Positive"],
+                        "color": "#0D1117",
+                        "border": "none", "borderRadius": "6px",
+                        "padding": "10px", "fontWeight": "800",
+                        "fontSize": "13px", "cursor": "pointer",
+                        "fontFamily": "'DM Mono', monospace",
+                        "letterSpacing": "1px",
+                    },
+                ),
+                html.Div(id="event-log-status", style={
+                    "marginTop": "8px", "fontSize": "12px",
+                    "color": COLORS["Positive"], "fontWeight": "600",
+                }),
             ], style=CARD_STYLE),
 
         ], style={"width": "300px", "flexShrink": "0"}),
 
-        # Centre column: timeline + volume
+        # ── CENTRE COLUMN (flex) ───────────────────────────────────────────────
         html.Div([
+
+            # SENTIMENT TIMELINE label + chart
+            html.Div("SENTIMENT TIMELINE — ROLLING 1-MIN & 5-MIN AVERAGES", style={
+                "color": COLORS["muted"], "fontSize": "10px",
+                "letterSpacing": "2px", "textTransform": "uppercase",
+                "marginBottom": "4px", "paddingLeft": "4px",
+            }),
             dcc.Graph(id="timeline-chart", config={"displayModeBar": False},
-                      style={"height": "320px", "marginBottom": "16px"}),
+                      style={"height": "300px", "marginBottom": "16px"}),
+
+            # TWEET VOLUME label + chart
+            html.Div("TWEET VOLUME PER MINUTE", style={
+                "color": COLORS["muted"], "fontSize": "10px",
+                "letterSpacing": "2px", "textTransform": "uppercase",
+                "marginBottom": "4px", "paddingLeft": "4px",
+            }),
             dcc.Graph(id="volume-chart", config={"displayModeBar": False},
-                      style={"height": "220px", "marginBottom": "16px"}),
+                      style={"height": "200px", "marginBottom": "16px"}),
 
             # Word clouds row
             html.Div([
                 html.Div([
-                    html.Div("😊 Positive Cloud", style={
+                    html.Div("Positive Cloud", style={
                         "color": COLORS["Positive"], "fontSize": "12px",
-                        "fontWeight": "600", "marginBottom": "8px",
+                        "fontWeight": "700", "marginBottom": "8px",
                     }),
-                    html.Img(id="wc-positive", style={"width": "100%", "borderRadius": "8px"}),
-                ], style={**CARD_STYLE, "flex": "1"}),
+                    html.Img(id="wc-positive",
+                             style={"width": "100%", "borderRadius": "8px",
+                                    "minHeight": "80px"}),
+                ], style={**CARD_STYLE, "flex": "1", "marginBottom": "0"}),
                 html.Div([
-                    html.Div("😡 Negative Cloud", style={
+                    html.Div("Negative Cloud", style={
                         "color": COLORS["Negative"], "fontSize": "12px",
-                        "fontWeight": "600", "marginBottom": "8px",
+                        "fontWeight": "700", "marginBottom": "8px",
                     }),
-                    html.Img(id="wc-negative", style={"width": "100%", "borderRadius": "8px"}),
-                ], style={**CARD_STYLE, "flex": "1"}),
-            ], style={"display": "flex", "gap": "16px"}),
+                    html.Img(id="wc-negative",
+                             style={"width": "100%", "borderRadius": "8px",
+                                    "minHeight": "80px"}),
+                ], style={**CARD_STYLE, "flex": "1", "marginBottom": "0"}),
+            ], style={"display": "flex", "gap": "12px"}),
 
         ], style={"flex": "1", "minWidth": "0", "margin": "0 16px"}),
 
-        # Right column: live tweet feed
+        # ── RIGHT COLUMN — LIVE FEED (300px) ──────────────────────────────────
         html.Div([
-            html.Div("📡 Live Tweet Feed", style={
-                "color": COLORS["text"], "fontSize": "13px", "fontWeight": "700",
-                "textTransform": "uppercase", "letterSpacing": "2px",
+            html.Div("LIVE FEED", style={
+                "color": COLORS["text"], "fontSize": "12px", "fontWeight": "800",
+                "textTransform": "uppercase", "letterSpacing": "3px",
                 "marginBottom": "12px",
+                "fontFamily": "'Syne', sans-serif",
             }),
             html.Div(id="tweet-feed", style={
-                "overflowY": "auto", "maxHeight": "820px",
+                "overflowY": "auto", "maxHeight": "860px",
             }),
-        ], style={"width": "320px", "flexShrink": "0"}),
+        ], style={"width": "300px", "flexShrink": "0"}),
 
     ], style={
-        "display": "flex",
-        "gap": "0",
-        "padding": "0 20px 20px",
+        "display": "flex", "gap": "0",
+        "padding": "16px 20px 20px",
         "alignItems": "flex-start",
     }),
 
-    # ── Interval ──
+    # ── Interval ──────────────────────────────────────────────────────────────
     dcc.Interval(id="refresh-interval", interval=5000, n_intervals=0),
 
-    # ── CSS injected via assets/custom.css ──
-
-], style={"background": COLORS["bg"], "minHeight": "100vh",
-          "fontFamily": "'DM Mono', monospace"})
+], style={
+    "background": COLORS["bg"],
+    "minHeight": "100vh",
+    "fontFamily": "'DM Mono', monospace",
+})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CALLBACKS
+# MAIN CALLBACK
 # ──────────────────────────────────────────────────────────────────────────────
 @app.callback(
-    Output("timeline-chart",  "figure"),
-    Output("volume-chart",    "figure"),
-    Output("team-bars",       "figure"),
-    Output("donut-chart",     "figure"),
-    Output("tweet-feed",      "children"),
-    Output("wc-positive",     "src"),
-    Output("wc-negative",     "src"),
-    Output("stat-pos",        "children"),
-    Output("stat-neu",        "children"),
-    Output("stat-neg",        "children"),
-    Output("last-update",     "children"),
+    Output("timeline-chart",    "figure"),
+    Output("volume-chart",      "figure"),
+    Output("team-bars",         "figure"),
+    Output("donut-chart",       "figure"),
+    Output("tweet-feed",        "children"),
+    Output("wc-positive",       "src"),
+    Output("wc-negative",       "src"),
+    Output("stat-pos",          "children"),
+    Output("stat-neu",          "children"),
+    Output("stat-neg",          "children"),
+    Output("last-update",       "children"),
+    Output("tweet-total",       "children"),
     Output("stream-status-bar", "children"),
-    Input("refresh-interval", "n_intervals"),
+    Input("refresh-interval",   "n_intervals"),
 )
 def refresh_dashboard(_n):
-    tweets  = fetch_recent_tweets_with_sentiment(limit=200)
-    ts_rows = fetch_sentiment_timeseries(minutes=30)
-    events  = fetch_match_events(minutes=60)
+    tweets      = fetch_recent_tweets_with_sentiment(limit=500)
+    ts_rows     = fetch_sentiment_timeseries(minutes=30)
+    events      = fetch_match_events(minutes=60)
     team_counts = fetch_team_sentiment_counts()
-    volume  = get_tweet_volume_per_minute(minutes=30)
+    volume      = get_tweet_volume_per_minute(minutes=30)
 
-    # Figures
+    # ── Figures ──
     fig_timeline = build_sentiment_timeseries(ts_rows, events)
     fig_volume   = build_volume_histogram(volume, events)
     fig_teams    = build_team_sentiment_bars(team_counts)
     fig_donut    = build_sentiment_donut(tweets)
 
-    # Tweet feed (10 most recent)
+    # ── Tweet feed (10 most recent) ──
     feed = [_tweet_card(t) for t in tweets[:10]]
 
-    # Word clouds
+    # ── Word clouds ──
     pos_texts = fetch_all_tweet_texts("Positive")
     neg_texts = fetch_all_tweet_texts("Negative")
     wc_pos = build_wordcloud_img(pos_texts, "Positive")
     wc_neg = build_wordcloud_img(neg_texts, "Negative")
 
-    # Stats
-    from collections import Counter
-    counts = Counter(t.get("label") for t in tweets if t.get("label"))
-    stat_pos = str(counts.get("Positive", 0))
-    stat_neu = str(counts.get("Neutral",  0))
-    stat_neg = str(counts.get("Negative", 0))
+    # ── Stats (all fetched tweets) ──
+    counts   = Counter(t.get("label") for t in tweets if t.get("label"))
+    pos_n    = counts.get("Positive", 0)
+    neu_n    = counts.get("Neutral",  0)
+    neg_n    = counts.get("Negative", 0)
+    total_n  = pos_n + neu_n + neg_n
 
-    now = datetime.utcnow().strftime("Updated %H:%M:%S UTC")
+    stat_pos = f"{pos_n:,}"
+    stat_neu = f"{neu_n:,}"
+    stat_neg = f"{neg_n:,}"
 
-    # ── Stream status badge ──
+    now        = datetime.now(timezone.utc).strftime("Updated %H:%M:%S UTC")
+    tweet_tot  = f"{total_n:,} tweets analysed"
+
+    # ── Stream status bar ──
     ss = stream_status.snapshot()
-    _mode_colors = {
-        "demo":         ("#FFD166", "⚙",  "DEMO MODE"),
+    _mode_meta = {
+        "demo":         ("#FFD166", "⚙",  "DEMO MODE — no API key"),
         "live":         ("#00E5A0", "●",  "LIVE"),
         "reconnecting": ("#FF9F1C", "↺",  "RECONNECTING"),
         "idle":         ("#888888", "○",  "IDLE"),
     }
-    clr, ico, lbl = _mode_colors.get(ss["mode"], ("#888", "?", ss["mode"].upper()))
-    parts = [
+    clr, ico, lbl = _mode_meta.get(ss["mode"], ("#888", "?", ss["mode"].upper()))
+    bar_parts = [
         html.Span(f"{ico} {lbl}", style={"color": clr, "fontWeight": "700",
-                                          "marginRight": "12px"}),
-        html.Span(f"attempts: {ss['attempts']}",
-                  style={"color": COLORS["muted"], "marginRight": "12px"}),
+                                         "marginRight": "10px"}),
     ]
-    if ss["last_ok"]:
-        parts.append(html.Span(
-            f"last ok: {ss['last_ok'].strftime('%H:%M:%S UTC')}",
-            style={"color": COLORS["muted"], "marginRight": "12px"}
-        ))
     if ss["mode"] == "reconnecting" and ss["next_retry_in"] > 0:
-        parts.append(html.Span(
+        bar_parts.append(html.Span(
             f"retry in {ss['next_retry_in']}s",
-            style={"color": "#FF9F1C", "fontWeight": "600"}
+            style={"color": "#FF9F1C", "marginRight": "10px"},
         ))
     if ss["last_err"]:
-        parts.append(html.Span(
-            f" | err: {ss['last_err'][:80]}",
-            style={"color": COLORS["Negative"], "marginLeft": "8px"}
+        bar_parts.append(html.Span(
+            f"err: {ss['last_err'][:100]}",
+            style={"color": COLORS["Negative"]},
         ))
-
-    # Poller stats (shown when active)
     ps = poller_status.snapshot()
     if ps["running"]:
-        parts.append(html.Span(
-            f"  |  ⚡ CricAPI: {ps['events_logged']} events",
-            style={"color": "#00E5A0", "marginLeft": "12px", "fontWeight": "600"}
+        bar_parts.append(html.Span(
+            f"  ⚡ CricAPI: {ps['events_logged']} events logged",
+            style={"color": "#00E5A0", "marginLeft": "12px"},
         ))
-        if ps["credits"] is not None:
-            parts.append(html.Span(
-                f"  ({ps['credits']} credits left)",
-                style={"color": COLORS["muted"]}
-            ))
+    status_bar = html.Div(bar_parts, style={"display": "flex", "alignItems": "center"})
 
-    status_bar = html.Div(parts, style={"display": "flex", "alignItems": "center"})
-
-    return (fig_timeline, fig_volume, fig_teams, fig_donut,
-            feed, wc_pos, wc_neg,
-            stat_pos, stat_neu, stat_neg, now, status_bar)
+    return (
+        fig_timeline, fig_volume, fig_teams, fig_donut,
+        feed, wc_pos, wc_neg,
+        stat_pos, stat_neu, stat_neg,
+        now, tweet_tot, status_bar,
+    )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# LOG EVENT CALLBACK
+# ──────────────────────────────────────────────────────────────────────────────
 @app.callback(
     Output("event-log-status", "children"),
-    Input("log-event-btn", "n_clicks"),
-    State("event-type",   "value"),
-    State("event-player", "value"),
+    Input("log-event-btn",     "n_clicks"),
+    State("event-type",        "value"),
+    State("event-player",      "value"),
     prevent_initial_call=True,
 )
 def log_event(n_clicks, event_type, player):
     if not event_type:
         return "⚠ Select an event type first."
     insert_event(event_type, player=player or "")
-    emoji = EVENT_EMOJI.get(event_type, "•")
-    return f"{emoji} {event_type.upper()} logged!"
+    now_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    emoji   = EVENT_EMOJI.get(event_type, "•")
+    return f"💥 {event_type.upper()} logged — {now_str}"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -404,14 +505,16 @@ def main():
     init_db()
     bearer_token = os.getenv("TWITTER_BEARER_TOKEN")
     start_streamer(bearer_token)
-    # Phase 2B — live ball-by-ball poller (no-op if env vars not set)
+
     started = start_poller()
     if started:
         logger.info("CricAPI event poller started.")
     else:
         logger.info("CricAPI poller inactive (set CRICAPI_KEY + MATCH_ID to enable).")
-    logger.info("Dashboard starting on http://0.0.0.0:8050")
-    app.run(host="0.0.0.0", port=int(os.getenv("DASH_PORT", 8050)), debug=False)
+
+    port = int(os.getenv("DASH_PORT", 8050))
+    logger.info(f"Dashboard starting on http://0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
 
 
 if __name__ == "__main__":
