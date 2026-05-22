@@ -14,7 +14,7 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"           # expose for local inspection / migration script
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ipl_user} -d ${POSTGRES_DB:-ipl_sentiment}"]
       interval: 10s
@@ -29,22 +29,18 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
-        condition: service_healthy    # wait until PG is ready
-    ports:
-      - "${DASH_PORT:-8050}:8050"
+        condition: service_healthy
+    expose:
+      - "8050"                        # only exposed internally (Nginx proxies it)
     environment:
-      # ── Database (points to the postgres service) ──
-      DATABASE_URL: postgresql://${POSTGRES_USER:-ipl_user}:${POSTGRES_PASSWORD:-ipl_pass}@postgres:5432/${POSTGRES_DB:-ipl_sentiment}
-      # ── Twitter / X API ──
-      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
-      # ── CricAPI ──
-      CRICAPI_KEY:  ${CRICAPI_KEY:-}
-      MATCH_ID:     ${MATCH_ID:-}
-      # ── Misc ──
-      DASH_PORT:    8050
-      LOG_LEVEL:    ${LOG_LEVEL:-INFO}
+      DATABASE_URL:          postgresql://${POSTGRES_USER:-ipl_user}:${POSTGRES_PASSWORD:-ipl_pass}@postgres:5432/${POSTGRES_DB:-ipl_sentiment}
+      TWITTER_BEARER_TOKEN:  ${TWITTER_BEARER_TOKEN:-}
+      CRICAPI_KEY:           ${CRICAPI_KEY:-}
+      MATCH_ID:              ${MATCH_ID:-}
+      DASH_PORT:             8050
+      LOG_LEVEL:             ${LOG_LEVEL:-INFO}
     volumes:
-      - ./models:/app/models          # cache HuggingFace model weights
+      - ./models:/app/models
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8050/"]
       interval: 30s
@@ -52,12 +48,60 @@ services:
       retries: 3
       start_period: 30s
 
-  # ── pgAdmin (optional web UI for inspecting the DB) ───────────────────────
+  # ── Nginx (reverse proxy + SSL termination) ────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: ipl_nginx
+    restart: unless-stopped
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Main Nginx config
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Virtual host + proxy params
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # SSL certificates (populated by certbot service below)
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      # Let's Encrypt ACME webroot
+      - certbot_webroot:/var/www/certbot:ro
+      # Nginx logs (accessible on host for debugging)
+      - ./nginx/logs:/var/log/nginx
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  # ── Certbot (Let's Encrypt SSL — renew mode) ───────────────────────────────
+  # Run once to issue cert:
+  #   docker compose run --rm certbot certonly \
+  #     --webroot -w /var/www/certbot \
+  #     -d YOUR_DOMAIN --email YOUR_EMAIL --agree-tos --non-interactive
+  # Renewal runs automatically via the `certbot renew` command on a schedule.
+  certbot:
+    image: certbot/certbot:latest
+    container_name: ipl_certbot
+    profiles: ["ssl"]              # only start with: docker compose --profile ssl up
+    volumes:
+      - ./nginx/ssl:/etc/letsencrypt
+      - certbot_webroot:/var/www/certbot
+    entrypoint: >
+      /bin/sh -c "trap exit TERM;
+      while :; do
+        certbot renew --quiet --webroot -w /var/www/certbot;
+        sleep 12h & wait $${!};
+      done;"
+
+  # ── pgAdmin (optional debug UI) ───────────────────────────────────────────
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: ipl_pgadmin
     restart: unless-stopped
-    profiles: ["debug"]              # only starts with: docker compose --profile debug up
+    profiles: ["debug"]
     depends_on:
       - postgres
     ports:
@@ -69,5 +113,6 @@ services:
       - pgadmin_data:/var/lib/pgadmin
 
 volumes:
-  pg_data:      # persistent PostgreSQL data
-  pgadmin_data: # pgAdmin session data
+  pg_data:
+  pgadmin_data:
+  certbot_webroot:    # shared between nginx and certbot for ACME challenge

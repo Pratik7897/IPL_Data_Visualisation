@@ -30,3 +30,10 @@ models/
 
 # Docker
 *.log
+
+# Nginx runtime files (certs populated by Certbot, logs are runtime)
+nginx/ssl/live/
+nginx/ssl/archive/
+nginx/ssl/renewal/
+nginx/ssl/.certbot.lock
+nginx/logs/
