@@ -1,19 +1,73 @@
 version: "3.9"
 
 services:
+
+  # ── PostgreSQL (production database) ──────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ipl_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-ipl_sentiment}
+      POSTGRES_USER:     ${POSTGRES_USER:-ipl_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ipl_pass}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"           # expose for local inspection / migration script
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ipl_user} -d ${POSTGRES_DB:-ipl_sentiment}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── IPL Dashboard (Dash + Gunicorn) ───────────────────────────────────────
   dashboard:
     build: .
-    ports:
-      - "8050:8050"
-    volumes:
-      - ./data:/app/data
-      - ./models:/app/models
-    environment:
-      - TWITTER_BEARER_TOKEN=${TWITTER_BEARER_TOKEN:-}
-      - LOG_LEVEL=INFO
+    container_name: ipl_dashboard
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy    # wait until PG is ready
+    ports:
+      - "${DASH_PORT:-8050}:8050"
+    environment:
+      # ── Database (points to the postgres service) ──
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ipl_user}:${POSTGRES_PASSWORD:-ipl_pass}@postgres:5432/${POSTGRES_DB:-ipl_sentiment}
+      # ── Twitter / X API ──
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+      # ── CricAPI ──
+      CRICAPI_KEY:  ${CRICAPI_KEY:-}
+      MATCH_ID:     ${MATCH_ID:-}
+      # ── Misc ──
+      DASH_PORT:    8050
+      LOG_LEVEL:    ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./models:/app/models          # cache HuggingFace model weights
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8050/"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
+
+  # ── pgAdmin (optional web UI for inspecting the DB) ───────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ipl_pgadmin
+    restart: unless-stopped
+    profiles: ["debug"]              # only starts with: docker compose --profile debug up
+    depends_on:
+      - postgres
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL:    admin@ipl.local
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+volumes:
+  pg_data:      # persistent PostgreSQL data
+  pgadmin_data: # pgAdmin session data

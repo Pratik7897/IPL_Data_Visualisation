@@ -1,15 +1,29 @@
-tweepy>=4.14.0
+# Core web framework
 dash>=2.14.0
 dash-bootstrap-components>=1.5.0
 plotly>=5.18.0
-pandas>=2.1.0
-numpy>=1.26.0
-transformers>=4.35.0
-torch>=2.1.0
-sqlalchemy>=2.0.0
-wordcloud>=1.9.3
-Pillow>=10.0.0
-python-dotenv>=1.0.0
-requests>=2.31.0
 flask>=3.0.0
 gunicorn>=21.0.0
+
+# Data
+pandas>=2.1.0
+numpy>=1.26.0
+
+# ML / NLP
+transformers>=4.35.0
+torch>=2.1.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9      # PostgreSQL (Phase 3A) — binary wheel, no libpq build needed
+
+# Visualisation extras
+wordcloud>=1.9.3
+Pillow>=10.0.0
+
+# Twitter / X API
+tweepy>=4.14.0
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0
